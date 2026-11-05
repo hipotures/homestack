@@ -16,6 +16,7 @@ mod live;
 mod planner;
 mod prometheus;
 mod registry;
+mod rules;
 
 use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -95,6 +96,7 @@ async fn main() -> ExitCode {
         .route("/api/dashboard/events", get(live::events))
         .route("/api/dashboard/snapshot", get(live::snapshot))
         .route("/api/dashboard/export", get(live::export))
+        .route("/api/prometheus/rules", get(live::rules))
         .route("/health/live", get(health))
         .route("/health/ready", get(health))
         .route(PROBE_PATH, get(|| async { StatusCode::NO_CONTENT }))

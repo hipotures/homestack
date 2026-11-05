@@ -426,7 +426,105 @@ mv /tmp/backfill-blocks/* /prometheus/
 ```
 
 Prometheus loads the moved blocks itself. The dashboard's six-hour cache can
-delay their appearance in closed buckets.
+delay their appearance in closed buckets. Finish log imports before building the
+historical aggregates described below; aggregates built earlier do not include
+later imports.
+
+## Recording rules
+
+Without recording rules the dashboard reads raw series, which takes several
+seconds for long ranges. Recording rules aggregate usage into one-minute
+increments that the dashboard reads for closed time:
+
+| Record | Content |
+|---|---|
+| `hs_usage:increase_1m` | counter and response increments by instrument, server, project, model and the other dashboard labels |
+| `hs_usage:bucket_increase_1m` | Codex duration histogram bucket increments by instrument, `le`, server and project |
+| `hs_usage:active_1m` | servers and projects with token usage, by agent |
+| `hs_usage:evaluated` | one sample per aggregated minute, labelled with the rules version |
+
+The group evaluates every minute with a configurable delay (`query_offset`,
+default `1h`), so samples that arrive late within that delay are included.
+Data newer than the newest aggregated minute is read raw, so the dashboard stays
+current to the minute. A minute without an `hs_usage:evaluated` sample of the
+current rules version (Prometheus downtime, a missed evaluation, a gap before
+the rules were installed) is read raw for the affected hours or buckets. Up to
+eight such runs are read separately; more make the whole range raw. Values stay
+correct either way; only speed differs. The version changes whenever the
+generated expressions change, including `HOMESTACK_CODEX_HISTORY_END`; old
+aggregates then no longer count and the rules must be reinstalled and rebuilt.
+
+Counter increments are taken per minute instead of per dashboard bucket, so a
+counter that restarts from zero inside a bucket (a resumed Claude session) loses
+at most one minute instead of the bucket's whole increase. Totals are therefore
+slightly higher and closer to the exact sum than raw views; Codex duration
+quantiles also differ slightly from raw `increase` estimates. Samples that arrive
+later than the delay are missing from the aggregates while the raw series hold
+them.
+
+### Installation
+
+All commands run inside the Prometheus container. Use the same rules file path
+for Prometheus and `promtool`: the evaluation phase within each minute derives
+from it, and equal phases let rebuilt history end exactly where live evaluation
+begins.
+
+1. Download the rules from the dashboard (`offset` accepts `1m` to `24h`) and
+   store them next to the configuration, for example as
+   `/etc/prometheus/homestack-ai-usage.rules.yml`:
+
+   ```bash
+   curl -fsS 'http://DASHBOARD/api/prometheus/rules?offset=1h' > homestack-ai-usage.rules.yml
+   ```
+
+2. Add the rules file and an out-of-order window to `prometheus.yml`. The window
+   accepts samples up to 24 hours older than the newest one, so a collector that
+   resends its persistent queue after a Prometheus outage is not rejected:
+
+   ```yaml
+   storage:
+     tsdb:
+       out_of_order_time_window: 24h
+   rule_files:
+     - /etc/prometheus/homestack-ai-usage.rules.yml
+   ```
+
+3. Validate and reload without a restart:
+
+   ```bash
+   promtool check config /etc/prometheus/prometheus.yml
+   kill -HUP 1
+   ```
+
+   `/api/v1/status/config` must show `out_of_order_time_window: 1d` and
+   `/api/v1/rules` the group `homestack-ai-usage` with healthy rules. One
+   evaluation takes about a second.
+
+4. After the first evaluation (within about a minute), read the timestamp of the
+   first live aggregated minute:
+
+   ```promql
+   min_over_time(timestamp(hs_usage:evaluated)[2h:10s])
+   ```
+
+5. Build the history from the start of the first day with usage data up to that
+   timestamp minus one second, then move the blocks within the same filesystem
+   so that Prometheus never sees a partially copied block:
+
+   ```bash
+   promtool tsdb create-blocks-from rules --url http://127.0.0.1:9090 \
+     --start FIRST_DATA_DAYT00:00:00Z --end FIRST_LIVE_TIMESTAMP_MINUS_ONE \
+     --output-dir /prometheus/rules-backfill /etc/prometheus/homestack-ai-usage.rules.yml
+   mv /prometheus/rules-backfill/* /prometheus/ && rmdir /prometheus/rules-backfill
+   ```
+
+   `promtool` ignores `query_offset` and evaluates each minute at its own
+   timestamp. Seventy-three days took under three minutes and produced about
+   50 MB of blocks. Never build a period twice: overlapping aggregates would be
+   counted twice.
+
+Until the history is built, ranges reaching before the first live minute are
+read raw for the missing hours.
 
 ## Dashboard architecture
 
@@ -456,6 +554,8 @@ selectors are not API inputs. The serving pipeline is:
    to mark values in the open `+Inf` bucket) and one closed-bucket p50
    `query_range`, both with the host/project matchers. They are
    bucket-approximated; means (Σ sum / Σ count) remain alongside.
+   `rules.rs` generates the recording rules served at `/api/prometheus/rules`;
+   the planner reads their aggregates where the heartbeat covers a range.
 3. `prometheus.rs`: one reused HTTP client, global concurrency **four**, query
    deduplication, per-key singleflight and bounded response/cache sizes.
 4. `dashboard.rs`: host/project filtering, token normalization, model pricing,
@@ -533,8 +633,9 @@ Ordinary refreshes within the same UTC bucket reuse
 history/baselines and execute only recent-window queries. Cold views and bucket
 rollovers can require more expensive retention-baseline calculations. This is
 not evidence of full-year performance. Late data in closed buckets becomes
-visible when those cached reads refresh. No recording rules or Prometheus
-configuration changes are required.
+visible when those cached reads refresh. With [recording rules](#recording-rules)
+installed, closed time comes from one-minute aggregates; ranges read raw data
+only after the newest aggregated minute and for unaggregated runs.
 
 Query caches allow 96 entries and 12 MiB of conservatively estimated parsed
 storage; an individual response is limited to 1 MiB. Global calculations retain

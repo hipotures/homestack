@@ -1,8 +1,10 @@
 //! Comparable activity estimates from occupied five-minute token-usage windows.
 use crate::{
     datasets::{Availability, Dataset, Selection, Series, TimeRange},
+    planner::{Coverage, samples},
     prometheus::{Prometheus, Source},
     registry::{Instrument, Kind},
+    rules,
 };
 use serde_json::json;
 use std::{collections::BTreeMap, sync::Arc};
@@ -36,6 +38,7 @@ pub async fn read(
     range: &TimeRange,
     timestamp: u64,
     history_end: f64,
+    coverage: Option<&Coverage>,
 ) -> Result<(Dataset, Vec<Arc<Source>>), String> {
     let span = range.partial_start - range.start;
     let step = match span {
@@ -103,7 +106,7 @@ pub async fn read(
             agents.push((agent, format!("({} > bool 0)", parts.join(" + "))));
         }
     }
-    let mut dataset = unavailable(
+    let dataset = unavailable(
         selection,
         &activity_range,
         "No token telemetry is available for this selection".into(),
@@ -121,6 +124,11 @@ pub async fn read(
             .join(" + ")
     );
     agents.push(("all", union));
+    if let Some(coverage) = coverage
+        && let Some(found) = aggregated(prom, coverage, &agents, &matchers, start, end, step, boundary).await?
+    {
+        return Ok(finish(dataset, found.0, found.1, end));
+    }
     // Exclude the left boundary even when a subquery includes its first sample.
     let query = |agent: &str, expression: &str, seconds: u64| {
         format!(
@@ -182,6 +190,15 @@ pub async fn read(
             }
         }
     }
+    Ok(finish(dataset, points, sources, end))
+}
+
+fn finish(
+    mut dataset: Dataset,
+    points: BTreeMap<String, BTreeMap<u64, f64>>,
+    sources: Vec<Arc<Source>>,
+    end: u64,
+) -> (Dataset, Vec<Arc<Source>>) {
     dataset.series = points
         .into_iter()
         .map(|(agent, points)| Series {
@@ -204,5 +221,131 @@ pub async fn read(
     dataset.warnings.clear();
     dataset.details = json!({"estimated":true,"window_seconds":SLOT,"through":end});
     dataset.seal();
-    Ok((dataset, sources))
+    (dataset, sources)
+}
+
+/// Active slots from the one-minute activity aggregates up to the newest aggregated minute,
+/// raw slots after it. `None` when some minute of the range was not aggregated.
+#[allow(clippy::too_many_arguments)]
+async fn aggregated(
+    prom: &Prometheus,
+    coverage: &Coverage,
+    agents: &[(&str, String)],
+    matchers: &str,
+    start: u64,
+    end: u64,
+    step: u64,
+    boundary: u64,
+) -> Result<Option<(BTreeMap<String, BTreeMap<u64, f64>>, Vec<Arc<Source>>)>, String> {
+    // 30-day reads keep each response small and closed ones cacheable.
+    const CHUNK: u64 = 30 * 86400;
+    let through = coverage.through_seconds().min(end as f64);
+    if through <= start as f64 {
+        return Ok(None);
+    }
+    let window = |from: f64, to: f64| ((to - from) * 1000.).round().max(1.) as u64;
+    let (runs, check) = crate::planner::gaps(prom, coverage, start as f64, through).await?;
+    let Some(runs) = runs else {
+        return Ok(None);
+    };
+    let names: Vec<&str> = agents.iter().map(|(a, _)| *a).filter(|a| *a != "all").collect();
+    let selector = format!("{}{{agent=~\"{}\"{matchers}}}", rules::ACTIVE, names.join("|"));
+    let mut reads = Vec::new();
+    let mut chunk = start / CHUNK * CHUNK;
+    while (chunk as f64) < through {
+        let from = chunk.max(start) as f64;
+        let to = ((chunk + CHUNK) as f64).min(through);
+        let ttl = if (chunk + CHUNK) as f64 <= through { 21600 } else { 30 };
+        reads.push(prom.instant(format!("{selector}[{}ms]", window(from, to)), to, ttl));
+        chunk += CHUNK;
+    }
+    // Slots (t - 300, t] touching an unaggregated run, or from the one holding the newest
+    // aggregated minute on, are read raw; overlap with aggregated slots is harmless in a union.
+    let mut windows: Vec<(u64, u64)> = runs
+        .iter()
+        .map(|(a, b)| {
+            (
+                (*a / SLOT as f64).floor() as u64 * SLOT + SLOT,
+                (*b / SLOT as f64).ceil() as u64 * SLOT,
+            )
+        })
+        .collect();
+    windows.push(((through / SLOT as f64).ceil() as u64 * SLOT, end));
+    let mut raw = Vec::new();
+    for (from, to) in windows.into_iter().map(|(a, b)| (a.max(start + SLOT), b.min(end))) {
+        if from > to {
+            continue;
+        }
+        for (agent, expression) in agents.iter().filter(|(agent, _)| *agent != "all") {
+            raw.push(async move {
+                let params = vec![
+                    ("query".into(), expression.clone()),
+                    ("start".into(), from.to_string()),
+                    ("end".into(), to.to_string()),
+                    ("step".into(), SLOT.to_string()),
+                    ("timeout".into(), "20s".into()),
+                ];
+                let ttl = if to as f64 <= through { 21600 } else { 30 };
+                prom.read("/api/v1/query_range", params, ttl)
+                    .await
+                    .map(|source| (agent.to_string(), source))
+            });
+        }
+    }
+    let (chunks, raw) = futures_util::try_join!(
+        futures_util::future::try_join_all(reads),
+        futures_util::future::try_join_all(raw)
+    )?;
+    let mut slots: BTreeMap<String, std::collections::BTreeSet<u64>> = BTreeMap::new();
+    for source in &chunks {
+        for (labels, minute, _) in samples(source) {
+            let Some(agent) = labels.get("agent") else {
+                continue;
+            };
+            // A minute ending at `minute` belongs to the slot holding its midpoint.
+            let slot = ((minute - 30.) / SLOT as f64).ceil() as u64 * SLOT;
+            if slot > start && slot <= end {
+                slots.entry(agent.clone()).or_default().insert(slot);
+            }
+        }
+    }
+    for (agent, source) in &raw {
+        for (_, slot, v) in samples(source) {
+            if v > 0. {
+                slots.entry(agent.clone()).or_default().insert(slot as u64);
+            }
+        }
+    }
+    // Total is the union of agents, never a sum of overlapping wall-clock time.
+    let union = slots.values().flatten().copied().collect();
+    slots.insert("all".into(), union);
+    let mut points = BTreeMap::new();
+    for (agent, _) in agents {
+        // Every bucket has a point, like the raw sums with `or vector(0)`.
+        let mut counts = BTreeMap::new();
+        for i in 0..boundary.saturating_sub(start) / step {
+            counts.insert(start + i * step, 0u64);
+        }
+        if end > boundary {
+            counts.insert(boundary, 0);
+        }
+        for slot in slots.get(*agent).into_iter().flatten() {
+            let stamp = if *slot <= boundary {
+                start + (slot - start).div_ceil(step) * step - step
+            } else {
+                boundary
+            };
+            *counts.entry(stamp).or_insert(0) += 1;
+        }
+        points.insert(
+            agent.to_string(),
+            counts.into_iter().map(|(t, n)| (t, n as f64 / 12.)).collect(),
+        );
+    }
+    let sources = chunks
+        .into_iter()
+        .chain(raw.into_iter().map(|(_, source)| source))
+        .chain([check])
+        .collect();
+    Ok(Some((points, sources)))
 }

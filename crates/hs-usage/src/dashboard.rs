@@ -1,7 +1,7 @@
 //! Shared snapshot construction, normalization, pricing, and bounded export retention.
 use crate::{
     datasets::{Availability, Dataset, Selection, Series, TimeRange, Timing, hash},
-    planner::{self, Block, Record},
+    planner::{self, Block, Coverage, Record},
     prometheus::{Prometheus, Source, now},
     registry::{self, Instrument},
 };
@@ -57,6 +57,7 @@ struct Global {
     range: TimeRange,
     /// Equal-length period before `range` for KPI deltas; `None` for "all".
     previous: Option<TimeRange>,
+    coverage: Option<Coverage>,
 }
 #[derive(Default)]
 struct Cache {
@@ -79,6 +80,9 @@ impl Dashboard {
             cache: Mutex::new(Cache::default()),
             connections: Arc::new(tokio::sync::Semaphore::new(32)),
         }
+    }
+    pub fn history_end(&self) -> f64 {
+        self.history_end
     }
     pub async fn snapshot(&self, selection: Selection) -> Result<Arc<Snapshot>, String> {
         selection.validate()?;
@@ -146,6 +150,7 @@ impl Dashboard {
                 .filter_map(|n| n.as_str().map(str::to_owned))
                 .collect();
             let registry = registry::instruments(&names, self.history_end);
+            let coverage = self.coverage(timestamp).await;
             let days = (seconds / 86400).max(7);
             let day = timestamp / 86400 * 86400;
             let hour = timestamp / 3600 * 3600;
@@ -164,19 +169,22 @@ impl Dashboard {
                     &self.prom,
                     &registry,
                     window(boundary - if all { seconds } else { 2 * seconds }, boundary, step),
-                    false
+                    false,
+                    coverage.as_ref()
                 ),
                 planner::block(
                     &self.prom,
                     &registry,
                     window(hour - days.min(30) * 86400, hour, 3600),
-                    true
+                    true,
+                    coverage.as_ref()
                 ),
                 planner::block(
                     &self.prom,
                     &registry,
                     window(day - (days + 7) * 86400, day, 86400),
-                    true
+                    true,
+                    coverage.as_ref()
                 )
             )?;
             let source_bytes: usize = main
@@ -206,6 +214,7 @@ impl Dashboard {
                     step,
                     partial_start: boundary - seconds,
                 }),
+                coverage,
             });
             cache.global.retain(|(k, _, _)| k != &key);
             cache.global.push_back((key, Instant::now(), Arc::clone(&global)));
@@ -234,11 +243,16 @@ impl Dashboard {
                 .iter()
                 .filter(|m| m.kind == registry::Kind::Histogram)
                 .collect();
-            let values = futures_util::future::try_join_all(
-                histograms
-                    .iter()
-                    .map(|histogram| planner::quantiles(&self.prom, histogram, &matchers, range, timestamp)),
-            )
+            let values = futures_util::future::try_join_all(histograms.iter().map(|histogram| {
+                planner::quantiles(
+                    &self.prom,
+                    histogram,
+                    &matchers,
+                    range,
+                    timestamp,
+                    global.coverage.as_ref(),
+                )
+            }))
             .await?;
             for (histogram, value) in histograms.into_iter().zip(values) {
                 quantiles.insert(histogram.measurement.to_owned(), value);
@@ -265,6 +279,7 @@ impl Dashboard {
             &global.range,
             timestamp,
             self.history_end,
+            global.coverage.as_ref(),
         )
         .await;
         let active_hours = match active_hours {
@@ -308,6 +323,31 @@ impl Dashboard {
         }
         Ok(snapshot)
     }
+    /// Minutes aggregated by recording rules of this build's version, if any are installed.
+    async fn coverage(&self, timestamp: u64) -> Option<Coverage> {
+        let version = crate::rules::version(self.history_end);
+        let beat = format!("{}{{rules=\"{version}\"}}", crate::rules::EVALUATED);
+        let hour = timestamp / 3600 * 3600;
+        let latest = self
+            .prom
+            .instant(format!("max_over_time(timestamp({beat})[2d:1m])"), timestamp as f64, 30);
+        // Hourly resolution suffices to tell whether aggregates reach back to the first data.
+        let oldest = self
+            .prom
+            .instant(format!("min_over_time(timestamp({beat})[600d:1h])"), hour as f64, 21600);
+        let (latest, oldest, first) = tokio::join!(latest, oldest, self.first_sample(timestamp));
+        let value = |source: Result<Arc<crate::prometheus::Source>, String>| {
+            source.ok().and_then(|s| planner::samples(&s).first().map(|row| row.2))
+        };
+        let (through, oldest, first) = (value(latest)?, value(oldest)?, first.ok()?);
+        Some(Coverage {
+            version,
+            through: (through * 1000.).round() as u64,
+            oldest: (oldest * 1000.).round() as u64,
+            // `first` is the start of the first data day; hourly resolution adds an hour.
+            from_first: oldest <= (first + 86400) as f64,
+        })
+    }
     /// Start of the day holding the first retained usage sample, or today without samples.
     async fn first_sample(&self, timestamp: u64) -> Result<u64, String> {
         let day = timestamp / 86400 * 86400;
@@ -318,7 +358,7 @@ impl Dashboard {
                 vec![
                     (
                         "query".into(),
-                        format!("count(last_over_time({}[1d]))", registry::DISCOVERY),
+                        format!("count(last_over_time({}[1d]))", registry::SAMPLES),
                     ),
                     ("start".into(), (day - 599 * 86400).to_string()),
                     ("end".into(), (day + 86400).to_string()),

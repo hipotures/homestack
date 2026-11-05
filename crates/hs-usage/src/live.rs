@@ -136,3 +136,22 @@ pub async fn snapshot(State(state): State<AppState>, Query(selection): Query<Sel
         Err(error) => (StatusCode::BAD_GATEWAY, axum::Json(json!({"error":error}))).into_response(),
     }
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Rules {
+    offset: Option<String>,
+}
+/// Recording rules matching this build; `offset` is the aggregation delay (default 1h).
+pub async fn rules(State(state): State<AppState>, Query(query): Query<Rules>) -> Response {
+    match crate::rules::offset(query.offset.as_deref().unwrap_or("1h")) {
+        Ok(offset) => (
+            [
+                (header::CONTENT_TYPE, "application/yaml; charset=utf-8"),
+                (header::CACHE_CONTROL, "no-store"),
+            ],
+            crate::rules::render(state.dashboard.history_end(), offset),
+        )
+            .into_response(),
+        Err(error) => (StatusCode::BAD_REQUEST, error).into_response(),
+    }
+}

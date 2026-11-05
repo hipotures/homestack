@@ -20,6 +20,8 @@ pub enum Kind {
 }
 
 pub const DISCOVERY: &str = "{__name__=~\"agy_(token_usage|invocations|tools|turns)|claude_code_(token_usage_tokens|cost_usage_USD|session_count|active_time_seconds|commit_count|lines_of_code_count)_total|claude_code_api_request_(duration_ms|count|ttft_ms|ttft_count)|codex_(response_token_usage|(turn_(token_usage|e2e_duration_ms|ttft_duration_ms|ttfm_duration_ms)|thread_started|conversation_turn_count|tool_call).*_(sum|count|total)|(turn_(e2e|ttft|ttfm)|tool_call)_duration_ms.*_bucket)\"}";
+/// Usage series without histogram buckets, which start with their own `_sum` and `_count`.
+pub const SAMPLES: &str = "{__name__=~\"agy_(token_usage|invocations|tools|turns)|claude_code_(token_usage_tokens|cost_usage_USD|session_count|active_time_seconds|commit_count|lines_of_code_count)_total|claude_code_api_request_(duration_ms|count|ttft_ms|ttft_count)|codex_(response_token_usage|(turn_(token_usage|e2e_duration_ms|ttft_duration_ms|ttfm_duration_ms)|thread_started|conversation_turn_count|tool_call).*_(sum|count|total))\"}";
 
 pub fn instruments(names: &[String], history_end: f64) -> Vec<Instrument> {
     let mut out = Vec::new();
