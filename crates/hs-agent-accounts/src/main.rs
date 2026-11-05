@@ -141,6 +141,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/operations/{id}", get(operation).delete(cancel_operation))
         .route("/api/v1/operations/{id}/events", get(events))
         .route("/api/v1/health", get(api_health))
+        .route("/api/v1/version", get(|| async { Json(json!({"version": VERSION})) }))
         .route("/health/live", get(live))
         .route("/health/ready", get(ready))
         .route("/health/heartbeat", get(heartbeat))

@@ -233,11 +233,33 @@ $('#theme').onclick = () => {
   theme();
 };
 theme();
-(async () => {
-  for (const provider of await api('/providers')) {
-    providerCapabilities.set(provider.id, provider.capabilities);
-    const option = node('option', provider.id); option.value = provider.id; $('#providers').append(option);
-  }
-  await refresh();
-})().catch(notice);
-setInterval(() => refresh().catch(notice), 15000);
+const pageVersion = document.querySelector('meta[name="agent-accounts-version"]').content;
+let providersLoaded = false, disconnected = false, polling = false, pollTimer = null, retryDelay = 2000;
+// One poll cycle: reload the page after a server upgrade, otherwise refresh the data.
+async function poll() {
+  if (polling) return;
+  polling = true; clearTimeout(pollTimer);
+  try {
+    const { version } = await api('/version');
+    if (version !== pageVersion) { location.reload(); return; }
+    if (!providersLoaded) {
+      for (const provider of await api('/providers')) {
+        providerCapabilities.set(provider.id, provider.capabilities);
+        const option = node('option', provider.id); option.value = provider.id; $('#providers').append(option);
+      }
+      providersLoaded = true;
+    }
+    await refresh();
+    if (disconnected) { disconnected = false; $('#notice').textContent = ''; }
+    retryDelay = 2000;
+    pollTimer = setTimeout(poll, 15000);
+  } catch {
+    disconnected = true;
+    $('#notice').textContent = 'Connection to the service lost. Reconnecting…';
+    pollTimer = setTimeout(poll, retryDelay);
+    retryDelay = Math.min(retryDelay * 2, 15000);
+  } finally { polling = false; }
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
+addEventListener('online', poll);
+poll();
