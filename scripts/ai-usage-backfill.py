@@ -511,7 +511,7 @@ def main():
     for key, (_, value) in series.items():
         if key not in present and unnamed(key) in elsewhere:
             # The same session was already imported under another project name.
-            status[key] = "conflict"
+            status[key] = f"imported as {elsewhere[unnamed(key)]}"
             renamed.add((elsewhere[unnamed(key)], dict(key[1]).get("project")))
         elif key not in present:
             status[key] = "new"
@@ -528,7 +528,7 @@ def main():
         for key in info["series"]:
             states[status[key]] += 1
         state = ("nothing before cutoff" if not states else
-                 "imported" if set(states) == {"imported"} else
+                 next(iter(states)) if len(states) == 1 and next(iter(states)).startswith("imported") else
                  ", ".join(f"{n} {s}" for s, n in sorted(states.items())) + " series")
         print(f"{project[:28]:<28} {utc(info['first']) if info['first'] else '-':<17} "
               f"{utc(info['last']) if info['last'] else '-':<17} {info['responses']:>7} "
@@ -545,8 +545,8 @@ def main():
 
     conflicts = [key for key, s in status.items() if s == "conflict"]
     for before, after in sorted(renamed):
-        print(f"\nSessions already imported as project {before!r} are not exported again as {after!r}; "
-              f"delete the {before!r} backfill first to rename them.")
+        print(f"\nSessions of {after!r} are already imported as project {before!r} and are not exported "
+              f"again; delete the {before!r} backfill first to import them under another name.")
     if conflicts:
         print(f"\n{len(conflicts)} series differ from already imported data and are NOT exported "
               "(scan all sources of these sessions together):")
