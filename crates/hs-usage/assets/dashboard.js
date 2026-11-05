@@ -44,7 +44,13 @@
     return epoch;
   }
   function scopeOptions(id,values,label) {
-    const target=$(id),current=selection[id],wanted=["*",...new Set([...values,current].filter(v=>v!=="*"))];
+    const target=$(id);
+    // Projects follow the selected server: a project absent there falls back to all projects.
+    if(id==="project"&&selection.project!=="*"&&selection.host!=="*"&&values.length&&!values.includes(selection.project)){
+      target.value="*";target.dispatchEvent(new Event("change",{bubbles:true}));
+      return;
+    }
+    const current=selection[id],wanted=["*",...new Set([...values,current].filter(v=>v!=="*"))];
     if(JSON.stringify([...target.options].map(o=>o.value))===JSON.stringify(wanted))return;
     target.replaceChildren(...wanted.map(value=>{const option=el("option","",value==="*"?label:value);option.value=value;option.selected=value===current;return option;}));
   }

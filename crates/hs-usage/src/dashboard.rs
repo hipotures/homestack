@@ -1015,8 +1015,21 @@ fn normalize(
         d.seal();
         datasets.insert(d.id.clone(), d);
     }
+    // Project options follow the selected server, so a server lists only its own projects.
     let mut hosts = BTreeSet::new();
     let mut projects = BTreeSet::new();
+    let mut scope = |host: Option<&str>, project: Option<&str>| {
+        let valid = |v: &&str| !v.is_empty() && v.len() <= 160 && !v.chars().any(char::is_control);
+        let host = host.filter(valid);
+        if let Some(h) = host {
+            hosts.insert(h.to_owned());
+        }
+        if let Some(p) = project.filter(valid)
+            && (selection.host == "*" || host == Some(selection.host.as_str()))
+        {
+            projects.insert(p.to_owned());
+        }
+    };
     for r in global
         .main
         .records
@@ -1024,12 +1037,10 @@ fn normalize(
         .chain(&global.hourly.records)
         .chain(&global.daily.records)
     {
-        if let Some(v) = r.labels.get("host_name") {
-            hosts.insert(v.clone());
-        }
-        if let Some(v) = r.labels.get("project") {
-            projects.insert(v.clone());
-        }
+        scope(
+            r.labels.get("host_name").map(String::as_str),
+            r.labels.get("project").map(String::as_str),
+        );
     }
     // Inactive scopes can exist only in retained boundary baselines. Keep them
     // discoverable without issuing another retention-wide label query.
@@ -1039,15 +1050,7 @@ fn normalize(
         .iter()
         .flat_map(|source| source.data["result"].as_array().into_iter().flatten())
     {
-        for (label, values) in [("host_name", &mut hosts), ("project", &mut projects)] {
-            if let Some(value) = row["metric"][label].as_str()
-                && !value.is_empty()
-                && value.len() <= 160
-                && !value.chars().any(char::is_control)
-            {
-                values.insert(value.to_owned());
-            }
-        }
+        scope(row["metric"]["host_name"].as_str(), row["metric"]["project"].as_str());
     }
     let mut sources = Vec::new();
     let mut seen = BTreeSet::new();
