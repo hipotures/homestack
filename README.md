@@ -14,7 +14,7 @@ HomeStack lets you treat your workspace operating system as cattle while keeping
 - **No permanent Proxmox root access** — Root access (via SSH or an authenticated [Herdr](https://herdr.dev) pane) is used only when installing or uninstalling HomeStack. Day-to-day operations run from the desktop client against lightweight `homestack-server` LXC containers that use least-privilege Proxmox API tokens.
 - **Full-screen TUI & scriptable CLI** — Manage workspaces, inspect storage capacity, start/stop Gold, add SSH keys, run rolling API server updates, and provision tools interactively with keyboard and mouse—or script everything with `--yes` and `--json`.
 - **Hardware-key SSH by default** — Generates isolated OpenSSH aliases under `~/.ssh/config.d/homestack/` with per-workspace `known_hosts` files (`StrictHostKeyChecking accept-new`), keeping your main `~/.ssh/known_hosts` clean across root refreshes and workspace recreations.
-- **Unified workspace setup (`homestack setup`)** — Provision shell profiles (`bash`, `zsh`, `fish`, `nu`), coding agents and toolchains (`codex`, `claude`, `opencode`, `hermes`, `pi`, `herdr`, `rust`), dotfiles, structured config patches (`toml`, `json`, `yaml`), and GitHub repositories with per-workspace deploy keys over a single SSH `ControlMaster` session.
+- **Unified workspace setup (`homestack setup`)** — Provision shell profiles (`bash`, `zsh`, `fish`, `nu`), coding agents and toolchains (`codex`, `claude`, `agent-telemetry`, `opencode`, `hermes`, `pi`, `herdr`, `rust`), dotfiles, structured config patches (`toml`, `json`, `yaml`), and GitHub repositories with per-workspace deploy keys over a single SSH `ControlMaster` session.
 
 ---
 
@@ -124,6 +124,7 @@ Use `--config PATH` to point at an explicit `client.toml` outside a named profil
 
 Inside the TUI (`Menu` / `m`):
 - **Settings › General › Reinstall HomeStack** opens the full installer with your saved settings pre-filled.
+- **Settings › General › Update Cloud-Init snippets** compares the vendor Cloud-Init snippets on every node against the embedded templates and writes only the differing or missing ones without touching anything else in Proxmox.
 - A yellow `↑` immediately before a container name means a newer HomeStack image is available. The client checks API images directly at startup alongside the main status read. `API ↑N` in the panel border reports available API updates; `API ?` reports an incomplete check.
 - **Update API containers** performs a rolling update of `homestack-server` LXC containers across cluster nodes using the saved deployment configuration.
 - **Settings › General › Uninstall HomeStack** removes HomeStack's Proxmox user, tokens, roles, ACLs, pools, and unused vendor Cloud-Init snippets, retires `client.toml` to `client.toml.uninstalled`, and returns cleanly to the first-time setup screen.
@@ -156,6 +157,7 @@ Lifecycle commands accept either a numeric `VMID` or an exact workspace name. Mu
 | `homestack setup [WORKSPACE] [SELECTORS...]` | Inspect or provision dotfiles, shell environments, applications, credentials, backups, and repositories. |
 | `homestack repo <VMID\|NAME> [OWNER/REPO]` | Provision or rotate a workspace-local GitHub deploy key and clone/fast-forward the repository. |
 | `homestack install` / `uninstall` | Install, reconcile, or remove HomeStack on Proxmox VE and deploy `homestack-server` containers. |
+| `homestack update [SERVICE ...]` | Update deployed HomeStack services (all by default) to their newest releases (`-y` applies all; `--auto` waits for images still being built and applies each as it is published). |
 | `homestack discover` | Read-only Proxmox cluster inspection prior to installation. |
 | `homestack profiles` | List available client profiles. |
 | `homestack transport` | Show active API server transport and endpoint configuration. |
@@ -177,7 +179,7 @@ homestack migrate 200 pve-example-2 --target-storage example-storage
 homestack destroy 200
 
 # Manage SSH keys and repositories
-homestack addkey 200 --key ~/.ssh/id_ecdsa_sk_trezor_vm.pub
+homestack addkey 200 --key ~/.ssh/id_ed25519_sk_workspace.pub
 homestack addkey 200
 homestack repo example-workspace
 homestack repo example-workspace owner/repository
@@ -211,7 +213,7 @@ homestack status 200
   4. Updating `sshkeys` changes Proxmox's generated Cloud-Init instance ID, so the keep snippet applies the keys at the next start. If the guest agent is unavailable, immediate application is deferred until that start.
   5. For a running VM, asks before restarting (`--yes` alone never restarts a VM; pass `--restart` to restart without prompting), shuts it down and starts it, waits for Cloud-Init to report `done`, removes the workspace's local `known_hosts` file (`~/.ssh/config.d/homestack/known_hosts/vm<VMID>`), and verifies the key in both `authorized_keys` files. A stopped VM stays stopped and applies the key on its next start.
   6. Without `--key`, `homestack addkey <WORKSPACE>` re-applies the keys already in Proxmox `sshkeys` (for example, to recreate a deleted `authorized_keys`).
-  7. After adding a new key, the matching private key is added to `identity_files` in the HomeStack config and the VM's local SSH config is rewritten (YubiKey first, Trezor when no YubiKey is connected).
+  7. After adding a new key, the matching private key is added to `identity_files` in the HomeStack config and the VM's local SSH config is rewritten (listing all `IdentityFile` entries by default so forwarded agents work without local USB keys, or ordering them by `[workspace_ssh] fido_devices` when explicit device preferences are configured).
 
 ---
 
@@ -257,11 +259,10 @@ homestack setup hermes env=bash app=codex --yes --non-interactive --json
 
 | Group | CLI Keys | Built-in / Configured Items |
 | :--- | :--- | :--- |
-| **Files** | `files`, `f` | User-defined `[[setup.items]]` files and directories (`path = "~/notes/"`). |
+| **Applications** | `app`, `a` | `codex`, `claude`, `agent-telemetry`, `herdr`, `opencode`, `opencode-v2`, `pi`, `hermes`, `rust`, `git`, `bk` (listed but not installable yet; bk lives in scriptoza), plus custom `[[setup.items]]` and their attached `files` / `config_files`. |
 | **Environment** | `env`, `e` | `bash`, `zsh`, `fish`, `nu` (shell startup configs with pre-apply backups; Bash keeps a marked block in existing files), `exports` (only the `export` lines of `~/.bashrc`). |
-| **Applications** | `app`, `a` | `codex`, `claude`, `herdr`, `opencode`, `opencode-v2`, `pi`, `hermes`, `rust`, `git`, `bk` (listed but not installable yet; bk lives in scriptoza), plus custom `[[setup.items]]`. |
-| **Credentials** | `cred`, `c` | Explicit credential/file items (always executed last after all other groups). |
 | **Repositories** | `repo`, `r` | Repositories discovered from GitHub (`[repo] owner`) or explicitly named (`repo=owner/name`). |
+| **Credentials** | `cred`, `c` | Explicit credential/file items (always executed last after all other groups). |
 
 - Bash keeps the existing lines of `~/.bashrc` and the login file: the HomeStack block between `# >>> homestack >>>` and `# <<< homestack <<<` is replaced (or put first, replacing the unmarked block an earlier setup left at the top). Exports changes nothing but its lines: each one replaces every `export KEY=` line of its key or is appended:
 
@@ -316,7 +317,7 @@ Listings include category index, stable ID, label, file path or repository ident
 - **Left pane (checkbox tree):** Represents selection state for the current session. Detected installed/in-sync items are shown in green; selecting an already-ready item or one that overwrites existing configuration highlights it in red as an update/reapply warning.
 - **Right pane (details):** Independently scrollable (`PageUp`/`PageDown`/mouse wheel) full item details.
 - **Keys:** `↑`/`↓` move, `←`/`→` switch groups, `Enter` expands/collapses, `Space` toggles an item or branch, `0` selects the current branch, `f` filters visible items, `F5` refreshes live guest state, `Ctrl+R` reloads the catalog and refreshes state, and `a` opens **Review & apply**.
-- **Services group:** after Repositories: the repositories (those with deployed services first), `Enter` reads and lists a repository's `.homestack/*.yaml` services with their published releases, `F5` reads them again. A service's state is what Proxmox shows: the containers whose description names it. `d` deploys new, independent instances: version (numeric `X.Y.Z` releases only), the nodes and storages (one row per node and storage; the disk and the home volume are new volumes there), one instance on each, CTIDs (empty takes the first free IDs whose derived IPs are also unallocated), sizes and non-secret environment, then a review, then unprivileged containers named `<id>`, `<id>-2`… in pool `homestack-service` through the deploy token, each with its own new volume (`mp0`) at the manifest's `persistence.mount` (default `/home/app`) and its health check passed before and after one restart. Nothing is removed on a failure. `m` grows a container's disks or removes containers with their homes; Enter on a container updates its image and `g` moves it to another node ([docs/service-replacement.md](docs/service-replacement.md)).
+- **Services group:** after Repositories: the repositories (those with deployed services first), `Enter` reads and lists a repository's `.homestack/*.yaml` services with their published releases, `F5` reads them again. A service's state is what Proxmox shows: the containers whose description names it. `d` deploys new, independent instances: version (numeric `X.Y.Z` releases only), the nodes and storages (one row per node and storage; the disk and the home volume are new volumes there), one instance on each, CTIDs (empty takes the first free IDs whose derived IPs are also unallocated), sizes, non-secret environment, and an optional public Pangolin subdomain separate from the container hostname, then a review, then unprivileged containers named `<id>`, `<id>-2`… in pool `homestack-service` through the deploy token, each with its own new volume (`mp0`) at the manifest's `persistence.mount` (default `/home/app`) and its health check passed before and after one restart. Manifests without `resources` are shown as `pangolin only` and published directly through the Pangolin Site on their node without creating a container or requiring an image release. Nothing is removed on a failure. `m` grows a container's disks or removes containers with their homes; Enter on a container updates its image and `g` moves it to another node ([docs/service-replacement.md](docs/service-replacement.md)).
 
 Service IP allocation checks current and pending static IPv4 settings on all LXC interfaces and VM Cloud-Init interfaces visible to the deploy token, including stopped guests. An unreadable guest blocks allocation. Manual CTIDs are checked during review, and addresses are checked again before creation or initialization recovery. Addresses configured only inside guests or on devices outside this inventory require separate network address management.
 
@@ -395,7 +396,7 @@ apt-get install -y rsync git
 ## Storage & Lifecycle Invariants
 
 - **`scsi0` vs `scsi1`:** `scsi0` is the disposable root (`vm-<VMID>-hs-root-default` or a collision-free staged volume name); `scsi1` is the persistent `ext4` home (`vm-<VMID>-hs-home-<USER>`, filesystem label `HS_HOME_<VMID>`).
-- **Transactional refresh:** `refresh` stages a new root from Gold while keeping the old root recoverable, keeps `scsi1` attached, boots and verifies the guest over `qemu-guest-agent`, and deletes the old root only after verification passes. A stopped workspace is booted temporarily for verification and stopped again afterward. If interrupted, the transaction journal in the VM description allows safe rollback or recovery on the next run. The SSH host keys survive a refresh: the vendor snippet keeps a root-only copy in `/home/<USER>/.homestack-ssh-host-keys` (made from the first root's keys) and restores it into `/etc/ssh` on every new root, so clients keep trusting the workspace.
+- **Transactional refresh:** `refresh` stages a new root from Gold (in the TUI form you can choose which Gold VM on the workspace's node to clone from, and recovering an interrupted refresh does not require a configured default Gold) while keeping the old root recoverable, keeps `scsi1` attached, boots and verifies the guest over `qemu-guest-agent`, and deletes the old root only after verification passes. A stopped workspace is booted temporarily for verification and stopped again afterward. If interrupted, the transaction journal in the VM description allows safe rollback or recovery on the next run. The SSH host keys survive a refresh: the vendor snippet keeps a root-only copy in `/home/<USER>/.homestack-ssh-host-keys` (made from the first root's keys) and restores it into `/etc/ssh` on every new root, so clients keep trusting the workspace.
 - **Refresh lock (`homestack-lock`):** Adding `homestack-lock` in Proxmox blocks `refresh` (even with `--yes`) to protect customized roots while still allowing `resize`, `setup`, `addkey`, and `status`.
 - **Alien VMs (`homestack-alien`):** Existing unmanaged VMs tagged `homestack-alien` can use `homestack setup`, `homestack repo`, and `homestack addkey` over SSH without requiring a separate `scsi1` disk or `HS_HOME_<VMID>` label, while lifecycle operations (`refresh`, `resize`, `migrate`, `destroy`) are refused.
 - **Cluster-aware status:** `homestack status` checks node online state first, skipping node-specific queries for offline nodes instead of hanging on proxy SSH timeouts, while lifecycle preflight remains fail-closed if a required target node is offline.
@@ -406,8 +407,12 @@ apt-get install -y rsync git
 
 - **Architecture & Operations:**
   - [Client profiles](docs/client-profiles.md)
+  - [Proxmox permissions](docs/proxmox-permissions.md)
   - [Service replacement and deletion](docs/service-replacement.md)
   - [Managed API and Pangolin services](docs/internal-services.md)
+  - [Agent Accounts service](deploy/agent-accounts/README.md)
+  - [AI telemetry attribution](docs/ai-telemetry.md)
+  - [PVE metrics operation and node agent](docs/pve-metrics-operations.md)
   - [OpenAPI specification](docs/openapi.json)
   - [Isolated E2E bootstrap](docs/e2e-bootstrap.md) & [E2E laboratory design](docs/isolated-e2e-lab.md)
 
