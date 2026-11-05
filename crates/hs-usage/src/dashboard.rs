@@ -563,22 +563,20 @@ fn agent_data(
             series(groups, "kind"),
             registry.iter().any(|m| m.measurement == "tokens"),
         );
-        if !d.series.is_empty() || !missing.is_empty() {
-            if prices.is_none() || !missing.is_empty() {
-                d.state = Availability::Partial;
-                // Priced models still sum to a lower-bound estimate; without a catalog there is none.
-                if prices.is_none() {
-                    d.total = None;
-                }
-                d.warnings.push(if prices.is_none() {
-                    "Pricing unavailable; restart the service to retry the startup catalog".into()
-                } else {
-                    format!(
-                        "Incomplete estimate; missing prices for {}",
-                        missing.into_iter().collect::<Vec<_>>().join(", ")
-                    )
-                });
+        if (!d.series.is_empty() || !missing.is_empty()) && (prices.is_none() || !missing.is_empty()) {
+            d.state = Availability::Partial;
+            // Priced models still sum to a lower-bound estimate; without a catalog there is none.
+            if prices.is_none() {
+                d.total = None;
             }
+            d.warnings.push(if prices.is_none() {
+                "Pricing unavailable; restart the service to retry the startup catalog".into()
+            } else {
+                format!(
+                    "Incomplete estimate; missing prices for {}",
+                    missing.into_iter().collect::<Vec<_>>().join(", ")
+                )
+            });
         }
         d.details = json!({"estimated":true,"basis":"Standard API rates from the startup LiteLLM catalog; not subscription charges"});
         d
