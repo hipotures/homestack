@@ -387,7 +387,8 @@ scripts/ai-usage-backfill.py --agent codex --source /archive/codex --output code
 ```
 
 `--source` (repeatable) replaces the default `~/.claude/projects` or
-`~/.codex/sessions`; `--host` names the server for archives copied elsewhere.
+`~/.codex/sessions`; `--host` names the server for archives copied elsewhere;
+`--project` (repeatable) limits the report and output to selected projects.
 The report lists projects, UTC ranges, responses, tokens and sessions, skipped
 records by reason and records by agent version. Only timestamps inside records
 are used, never file or directory names (Codex names them in local time);

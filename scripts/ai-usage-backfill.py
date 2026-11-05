@@ -453,6 +453,8 @@ def main():
     parser.add_argument("--prometheus", default=os.environ.get("HOMESTACK_PROMETHEUS_URL"),
                         help="Prometheus base URL (default: $HOMESTACK_PROMETHEUS_URL)")
     parser.add_argument("--pricing", default=PRICING_URL, help="LiteLLM catalog URL or file (Claude cost)")
+    parser.add_argument("--project", action="append",
+                        help="import only this project, repeatable (default: all projects)")
     parser.add_argument("--output", type=Path, help="write new series as OpenMetrics for promtool")
     args = parser.parse_args()
     if not args.prometheus:
@@ -470,6 +472,13 @@ def main():
         scan_claude(files, projects, load_pricing(args.pricing), scan)
     else:
         scan_codex(files, projects, scan)
+
+    if args.project:
+        found_projects = {event[1] for event in scan.events}
+        for name in sorted(set(args.project) - found_projects):
+            print(f"  project {name!r} not found in these logs")
+        scan.events = [e for e in scan.events if e[1] in args.project]
+        scan.sessions = {k: v for k, v in scan.sessions.items() if v[1] in args.project}
 
     prom = Prometheus(args.prometheus)
     limit, found = cutoff(prom, args.agent, args.host)
