@@ -383,10 +383,12 @@ fn row(label: &str, value: impl Into<String>) -> (String, String) {
     (label.to_owned(), value.into())
 }
 
-/// An error, its text shown as written.
+/// An error, wrapped to the terminal width inside its frame.
 #[must_use]
 pub fn error(message: &str, style: &Style) -> String {
-    let lines: Vec<String> = message.lines().map(str::to_owned).collect();
+    // Reserve both borders and one padding cell on either side.
+    let width = style.width.saturating_sub(4).max(1);
+    let lines = crate::setup::show::wrap(message, width);
     panel(&style.paint("ERROR", Color::Red), &lines, style, (0, 1))
 }
 
