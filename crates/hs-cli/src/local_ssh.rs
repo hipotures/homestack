@@ -25,11 +25,10 @@ fn ssh_path(path: &str) -> String {
 
 /// The lines of a workspace's SSH config.
 ///
-/// With keys of one kind (or unnamed ones) every `IdentityFile` is listed.
-/// With keys of several security-key kinds ssh would try the handles of a
-/// kind that is not connected, and the connected device would ask once per
-/// handle, so the files are chosen by which kind is connected, in the order
-/// of `fido_devices`.
+/// Without explicit device preferences every `IdentityFile` is listed,
+/// allowing a forwarded agent to sign without local USB devices. With keys
+/// of several security-key kinds and `fido_devices` configured, the files
+/// are chosen by which kind is connected, in the preferred order.
 #[must_use]
 pub fn local_ssh_lines(home: &Path, ssh: &WorkspaceSsh, vmid: u32, name: &str, ip: &str) -> Vec<String> {
     // OpenSSH expands ~ using passwd, independently of the child's HOME.
@@ -66,7 +65,7 @@ pub fn local_ssh_lines(home: &Path, ssh: &WorkspaceSsh, vmid: u32, name: &str, i
             ssh_path(&known_hosts_file(home, vmid).display().to_string())
         ),
     ]);
-    if kinds.len() < 2 {
+    if kinds.len() < 2 || ssh.fido_devices.is_empty() {
         lines.extend(files.iter().map(|path| format!("    IdentityFile {}", ssh_path(path))));
         lines.extend(tail);
         return lines;
