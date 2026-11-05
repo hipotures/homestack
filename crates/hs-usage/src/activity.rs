@@ -121,39 +121,41 @@ pub async fn read(
             .join(" + ")
     );
     agents.push(("all", union));
-    let query = |seconds: u64| {
-        agents
-            .iter()
-            .map(|(agent, expression)| {
-                // Exclude the left boundary even when a subquery includes its first sample.
-                format!(
-                    "label_replace(sum_over_time(({expression})[{}s:300s]) / 12, \"agent\", \"{agent}\", \"\", \"\")",
-                    seconds - 1
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(" or ")
+    // Exclude the left boundary even when a subquery includes its first sample.
+    let query = |agent: &str, expression: &str, seconds: u64| {
+        format!(
+            "label_replace(sum_over_time(({expression})[{}s:300s]) / 12, \"agent\", \"{agent}\", \"\", \"\")",
+            seconds - 1
+        )
     };
-    let mut sources = Vec::new();
+    // Prometheus evaluates `or` operands one after another; separate per-agent
+    // queries run concurrently, closed buckets first.
+    let mut reads: Vec<futures_util::future::BoxFuture<'_, Result<Arc<Source>, String>>> = Vec::new();
     if boundary > start {
-        sources.push(
-            prom.read(
+        for (agent, expression) in &agents {
+            reads.push(Box::pin(prom.read(
                 "/api/v1/query_range",
                 vec![
-                    ("query".into(), query(step)),
+                    ("query".into(), query(agent, expression, step)),
                     ("start".into(), (start + step).to_string()),
                     ("end".into(), boundary.to_string()),
                     ("step".into(), step.to_string()),
                     ("timeout".into(), "20s".into()),
                 ],
                 21600,
-            )
-            .await?,
-        );
+            )));
+        }
     }
     if end > boundary {
-        sources.push(prom.instant(query(end - boundary), end as f64, 30).await?);
+        for (agent, expression) in &agents {
+            reads.push(Box::pin(prom.instant(
+                query(agent, expression, end - boundary),
+                end as f64,
+                30,
+            )));
+        }
     }
+    let sources = futures_util::future::try_join_all(reads).await?;
     let mut points = BTreeMap::<String, BTreeMap<u64, f64>>::new();
     for source in &sources {
         let matrix = source.data["resultType"] == "matrix";

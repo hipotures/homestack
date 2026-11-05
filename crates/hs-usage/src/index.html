@@ -162,7 +162,7 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--codex); ou
 </head><body>
 <main data-signals="window.usage.initial()"
  data-init="window.usage.restore(el)"
- data-effect="@get('/api/dashboard/events', {payload:{agent:$agent,host:$host,project:$project,range:$range,epoch:window.usage.select({agent:$agent,host:$host,project:$project,range:$range},$_sync)},retry:'always',retryMaxCount:1000,retryInterval:3000})">
+ data-effect="@get('/api/dashboard/events', {payload:{agent:$agent,host:$host,project:$project,range:$range,epoch:window.usage.select({agent:$agent,host:$host,project:$project,range:$range},$_sync)},openWhenHidden:true,retry:'always',retryMaxCount:1000,retryInterval:3000})">
 <header class="top">
 <div class="brand"><h1>AI usage</h1><span class="live" id="updated" aria-live="polite"><span class="live-dot" aria-hidden="true"></span><span id="updated-text">connecting…</span></span></div>
 <div class="controls">
