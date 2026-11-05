@@ -62,10 +62,14 @@ def count(value):
 
 
 class Projects:
-    """Same attribution as the live relay: Git common directory name, else hostname."""
+    """Same attribution as the live relay: Git common directory name, else hostname.
 
-    def __init__(self, host):
+    Explicit path mappings take precedence, for repositories moved elsewhere.
+    """
+
+    def __init__(self, host, mappings):
         self.host = host
+        self.mappings = sorted(mappings, key=lambda m: len(m[0].parts), reverse=True)
         self.cache = {}
 
     def __call__(self, cwd):
@@ -77,6 +81,9 @@ class Projects:
 
     def resolve(self, cwd):
         path = Path(cwd)
+        for prefix, name in self.mappings:
+            if path == prefix or prefix in path.parents:
+                return name, "mapped"
         existing = next(p for p in (path, *path.parents) if p.is_dir())
         repository = self.repository(existing)
         if existing == path:
@@ -453,6 +460,8 @@ def main():
     parser.add_argument("--prometheus", default=os.environ.get("HOMESTACK_PROMETHEUS_URL"),
                         help="Prometheus base URL (default: $HOMESTACK_PROMETHEUS_URL)")
     parser.add_argument("--pricing", default=PRICING_URL, help="LiteLLM catalog URL or file (Claude cost)")
+    parser.add_argument("--map", action="append", metavar="PATH=PROJECT",
+                        help="attribute logs from PATH and its subdirectories to PROJECT, repeatable")
     parser.add_argument("--project", action="append",
                         help="import only this project, repeatable (default: all projects)")
     parser.add_argument("--prom-project",
@@ -471,7 +480,13 @@ def main():
     print(f"Agent {args.agent}, server {args.host}: {len(files)} log files in "
           + ", ".join(str(s) for s in sources))
 
-    scan, projects = Scan(), Projects(args.host)
+    mappings = []
+    for item in args.map or []:
+        path, sep, name = item.rpartition("=")
+        if not sep or not path or not name:
+            parser.error(f"--map expects PATH=PROJECT, got {item!r}")
+        mappings.append((Path(path), name))
+    scan, projects = Scan(), Projects(args.host, mappings)
     if args.agent == "claude":
         scan_claude(files, projects, load_pricing(args.pricing), scan)
     else:

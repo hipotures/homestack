@@ -388,6 +388,9 @@ scripts/ai-usage-backfill.py --agent codex --source /archive/codex --output code
 
 `--source` (repeatable) replaces the default `~/.claude/projects` or
 `~/.codex/sessions`; `--host` names the server for archives copied elsewhere;
+`--map PATH=PROJECT` (repeatable) attributes logs from a directory and its
+subdirectories to a project, e.g. a repository migrated elsewhere whose local
+directory is no longer a Git checkout; the longest matching path wins.
 `--project` (repeatable) limits the report and output to selected projects.
 `--prom-project NAME` stores all selected projects under one Prometheus
 project, e.g. a removed worktree directory of the same repository. Sessions
