@@ -8,6 +8,7 @@
 //!
 //! Purpose-built, shared dashboard datasets with local Datastar and ECharts assets.
 
+mod activity;
 mod dashboard;
 mod datasets;
 mod limits;

@@ -423,6 +423,24 @@ A token dataset includes model/category series and shared category, model,
 cache-hit and per-model cache-hit projections. Cost, counters and durations have shared timelines.
 Tables, tiles and charts consume these projections rather than issuing queries.
 
+The **When you work** card includes `all.activeHours`, an estimate independent
+of the agents' incompatible native duration measurements. Each completed UTC
+five-minute window with positive token usage contributes five minutes. Token
+volume does not change the duration. Parallel sessions, hosts and projects are
+merged after the selected filters; the overall total is the union of selected
+agents, so it can be smaller than the sum of the individual agent totals.
+Autonomous work counts, idle gaps do not, and missing telemetry is not recovered.
+The current unfinished five-minute window is omitted. Counter subtraction and
+the Codex frozen-history boundary follow the token accounting rules above.
+The chart follows the global range and agent/server/project filters. Its buckets
+are five minutes for 1h, hourly through two days, daily through 45 days, weekly
+through 180 days and 30 days for longer spans. Those are fixed UTC durations,
+not calendar months. Prometheus aggregates five-minute occupancy before returning
+chart points, so longer views do not transfer per-session histories. Query
+failures leave an explicit unavailable state in this card without hiding the
+other dashboard data. The existing token heatmap remains below the hours chart
+and retains its separately stated seven-to-thirty-day window.
+
 Range steps give 30-90 points per chart and match `AIUsage.RANGES` in the
 dashboard theme: 1h/2m, 24h/30m, 7d/3h, 30d/12h, 90d/1d, 180d/3d and 1y/1w.
 `all` starts on the day of the first retained sample (one daily count query over

@@ -196,7 +196,7 @@
   const esc=v=>String(v).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c]);
   const two=n=>String(n).padStart(2,"0");
   const chosen=()=>Object.keys(agents).filter(a=>selection.agent==="all"||selection.agent===a);
-  let metric="cost",trendChart,heatChart;
+  let metric="cost",trendChart,heatChart,hoursChart;
   try{metric=["tokens","types"].includes(localStorage.getItem("metric"))?localStorage.getItem("metric"):"cost";}catch(_){}
   // Token types stack to the total: output is drawn without its reasoning part.
   const TYPES=[["cached","Cached input","--tok-cached"],["input","Uncached input","--tok-uncached"],["written","Cache write","--tok-written"],["output","Output","--tok-output"],["reasoning","Reasoning","--tok-reasoning"]];
@@ -260,7 +260,7 @@
       kpi("Cache hit",totals.cacheHit?.value==null?"—":F.pct(totals.cacheHit.value*100),delta(totals.cacheHit?.value,previous.cacheHit,{goodUp:true,points:true}),hitBars,hitNote),
       kpi("Output",F.tokens(output),delta(output,previous.output),sparkline(spark(outputs),getComputedStyle(document.documentElement).getPropertyValue("--tok-output").trim()),outputBody,"Output includes reasoning tokens",F.full(output)),
     ].join("");
-    renderTrend(range,firstActive);renderScopes(range);renderComposition(totals);renderModels();renderHeat();renderSpikes(summary,range);renderAgents(summary,range);
+    renderTrend(range,firstActive);renderScopes(range);renderComposition(totals);renderModels();renderHours();renderHeat();renderSpikes(summary,range);renderAgents(summary,range);
   }
   function quotaOverlay(range) {
     const enabledEvents=$("limit-events").checked,enabledPeriods=$("limit-periods").checked;
@@ -405,13 +405,40 @@
         <div class="meta"><span title="${F.full(r.tokens)}">${F.tokens(r.tokens)} tokens</span>${r.cost&&r.tokens?`<span>${F.cost(r.cost/r.tokens*1e6)} / 1M</span>`:""}${["codex","antigravity"].includes(r.agent)?`<span>${r.cost==null?"no price":"estimated price"}</span>`:""}</div></div>`;}).join("")}
       ${idle.map((r,i)=>`<div class="idle${i?"":" first"}"><span class="name"><i class="sw" style="background:${AIUsage.colorFor(`${agents[r.agent]} · ${r.model}`)}"></i>${esc(r.model)}</span><span class="num">—</span></div>`).join("")}</div>`;
   }
+  function renderHours() {
+    const d=datasets.get("all.activeHours"),available=d&&d.state!=="unavailable"&&d.series.length>0;
+    const hours=v=>`${F.full(Math.round(v*100)/100)} h`;
+    $("hours-chart").hidden=!available;
+    $("hours-empty").hidden=!!available;
+    $("hours-empty").textContent=d?.warnings?.join(" · ")||"No activity observations are available for this selection.";
+    $("hours-total").textContent=d?.total==null?"—":`≈ ${hours(d.total)}`;
+    $("hours-total").title="Overall estimated time; overlapping agents count once";
+    const rows=chosen().map(agent=>({agent,series:d?.series.find(s=>s.id===agent)}));
+    $("hours-legend").innerHTML=rows.map(({agent,series})=>`<span><i class="sw" style="background:${AIUsage.colorFor(agents[agent])}"></i>${agents[agent]} <span class="num">${series?`≈ ${hours(total(series.points))}`:"not reported"}</span></span>`).join("");
+    if(!available){$("hours-sub").textContent="estimated active hours · selected range";return;}
+    const range=d.range;
+    $("hours-sub").textContent=`estimated active hours · ${bucketLabel(range.step)} · through ${new Date(range.end*1000).toLocaleString()}`;
+    hoursChart=hoursChart||AIUsage.init($("hours-chart"));
+    hoursChart.setOption({
+      grid:{left:8,right:8,top:16,bottom:12,containLabel:true},
+      tooltip:{trigger:"axis",formatter:AIUsage.tooltipFormatter(hours)},
+      xAxis:{type:"time",min:range.start*1000,max:range.end*1000,axisLabel:{hideOverlap:true}},
+      yAxis:{type:"value",min:0,axisLabel:{formatter:hours}},
+      series:rows.filter(r=>r.series).map(({agent,series})=>{const color=AIUsage.colorFor(agents[agent]);return {
+        id:agent,name:agents[agent],type:"line",showSymbol:false,smooth:false,connectNulls:false,
+        itemStyle:{color},lineStyle:{color,width:2},areaStyle:{color,opacity:.08},
+        data:series.points.map(([t,v])=>[t*1000,v]),
+      };}),
+    },{replaceMerge:["series"]});
+    hoursChart.resize();
+  }
   function renderHeat() {
     const activity=datasets.get("all.activity");if(!activity)return;
     // Cells sum every agent; the tooltip splits each cell back per agent.
     const cells=new Map(),split=new Map();for(const s of activity.series)for(const [t,v]of s.points){const d=new Date(t*1000),key=`${(d.getDay()+6)%7},${d.getHours()}`,parts=split.get(key)||{};cells.set(key,(cells.get(key)||0)+v);parts[s.dimensions.model]=(parts[s.dimensions.model]||0)+v;split.set(key,parts);}
     const data=[];for(let day=0;day<7;day++)for(let hour=0;hour<24;hour++)data.push([hour,day,cells.get(`${day},${hour}`)||0]);
     const days=["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
-    $("heat-chart").closest("section").hidden=!data.some(v=>v[2]>0);
+    $("heat-detail").hidden=!data.some(v=>v[2]>0);
     // The heatmap reads a separate hourly block capped at 30 days (7 at least), so its window is stated.
     $("heat-sub").textContent=`tokens by weekday and hour · local time · last ${Math.round((activity.range.end-activity.range.start)/86400)} days`;
     heatChart=heatChart||AIUsage.init($("heat-chart"));

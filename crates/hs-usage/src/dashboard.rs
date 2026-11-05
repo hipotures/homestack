@@ -245,6 +245,38 @@ impl Dashboard {
             }
         }
         let mut snapshot = normalize(&global, selection, &self.prices, timestamp, &quantiles);
+        // Discovery is global; an agent without token observations in this scope/range
+        // must remain unavailable rather than acquiring a fabricated zero-hour line.
+        let activity_registry: Vec<_> = global
+            .registry
+            .iter()
+            .filter(|m| {
+                snapshot
+                    .datasets
+                    .get(&format!("{}.tokens", m.agent))
+                    .is_some_and(|d| !d.series.is_empty())
+            })
+            .cloned()
+            .collect();
+        let active_hours = crate::activity::read(
+            &self.prom,
+            &activity_registry,
+            &snapshot.selection,
+            &global.range,
+            timestamp,
+            self.history_end,
+        )
+        .await;
+        let active_hours = match active_hours {
+            Ok((dataset, sources)) => {
+                snapshot.sources.extend(sources);
+                dataset
+            }
+            Err(error) => crate::activity::unavailable(&snapshot.selection, &global.range, error),
+        };
+        snapshot.source_freshness["activeHours"] = json!({"checked_at":current});
+        snapshot.id = hash(&(&snapshot.id, &active_hours.version));
+        Arc::make_mut(&mut snapshot.datasets).insert(active_hours.id.clone(), active_hours);
         let quota = crate::limits::read(&self.prom, &snapshot.selection, &global.range, timestamp).await;
         let limits = match quota {
             Ok((dataset, sources)) => {
