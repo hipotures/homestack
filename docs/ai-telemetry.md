@@ -375,6 +375,52 @@ itself. Claude also carries the project; a shared Codex server does not.
 References: [Codex CLI](https://learn.chatgpt.com/docs/developer-commands),
 [Prometheus OTLP resource attributes](https://prometheus.io/docs/guides/opentelemetry/#promoting-resource-attributes).
 
+## Historical backfill from agent logs
+
+`scripts/ai-usage-backfill.py` reconstructs usage from before telemetry was
+enabled. Run it on each server as the account owning the logs, one agent at a
+time:
+
+```bash
+scripts/ai-usage-backfill.py --agent claude --prometheus http://PROMETHEUS:9090
+scripts/ai-usage-backfill.py --agent codex --source /archive/codex --output codex.om
+```
+
+`--source` (repeatable) replaces the default `~/.claude/projects` or
+`~/.codex/sessions`; `--host` names the server for archives copied elsewhere.
+The report lists projects, UTC ranges, responses, tokens and sessions, skipped
+records by reason and records by agent version. Only timestamps inside records
+are used, never file or directory names (Codex names them in local time);
+timestamps without a zone are skipped.
+
+Imported data covers tokens, sessions and, for Claude, cost. Claude responses
+are deduplicated by message and request ID, keeping the final streamed counts;
+Codex by `response_id`, or for older rollouts by session and cumulative total.
+Missing or invalid counters are skipped, never imported as zero. Claude cost
+uses the current LiteLLM Anthropic rates, including 1h cache writes and token
+tiers; responses without a complete price get no cost. Codex cost is estimated
+by the dashboard as for live data. Commits, lines, active time and request
+timing are not reconstructed. Projects follow the live attribution; a removed
+directory inside a repository keeps that repository, and other removed paths
+are listed with their guessed name.
+
+Only usage strictly before the first live sample of the server, or of any
+writer without `host_name`, is imported, so backfill cannot overlap live
+samples or the Codex turn history. Series carry `backfill="logs"` and the
+session ID, aggregated into fixed five-minute UTC buckets, so rescans are
+deterministic. Series already in Prometheus with equal values are reported as
+imported and are not written again; differing ones are reported as conflicts.
+`--output` writes only new series as OpenMetrics. Inside the Prometheus
+container:
+
+```bash
+promtool tsdb create-blocks-from openmetrics --max-block-duration=24h codex.om /tmp/backfill-blocks
+mv /tmp/backfill-blocks/* /prometheus/
+```
+
+Prometheus loads the moved blocks itself. The dashboard's six-hour cache can
+delay their appearance in closed buckets.
+
 ## Dashboard architecture
 
 The Alpine `homestack-usage` binary embeds its HTML, vanilla JavaScript,
