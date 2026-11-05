@@ -455,10 +455,14 @@ def main():
     parser.add_argument("--pricing", default=PRICING_URL, help="LiteLLM catalog URL or file (Claude cost)")
     parser.add_argument("--project", action="append",
                         help="import only this project, repeatable (default: all projects)")
+    parser.add_argument("--prom-project",
+                        help="Prometheus project name for all selected --project values (default: unchanged)")
     parser.add_argument("--output", type=Path, help="write new series as OpenMetrics for promtool")
     args = parser.parse_args()
     if not args.prometheus:
         parser.error("--prometheus or HOMESTACK_PROMETHEUS_URL is required")
+    if args.prom_project and not args.project:
+        parser.error("--prom-project requires at least one --project")
 
     home = Path.home()
     sources = args.source or [home / ".claude" / "projects" if args.agent == "claude" else home / ".codex" / "sessions"]
@@ -479,6 +483,17 @@ def main():
             print(f"  project {name!r} not found in these logs")
         scan.events = [e for e in scan.events if e[1] in args.project]
         scan.sessions = {k: v for k, v in scan.sessions.items() if v[1] in args.project}
+    if args.prom_project:
+        # Several log projects (e.g. a removed worktree) become one Prometheus project.
+        name = args.prom_project
+
+        def rename(labels):
+            return tuple(sorted((k, name if k == "project" else v) for k, v in labels))
+
+        scan.events = [(ts, name, rename(labels), metrics, session)
+                       for ts, _, labels, metrics, session in scan.events]
+        scan.sessions = {k: (ts, name, rename(labels)) for k, (ts, _, labels) in scan.sessions.items()}
+        print(f"  importing {', '.join(args.project)} as project {name!r}")
 
     prom = Prometheus(args.prometheus)
     limit, found = cutoff(prom, args.agent, args.host)
@@ -488,9 +503,17 @@ def main():
 
     series, by_project = build(scan, args.agent, args.host, limit)
     present = existing(prom, series, args.host)
-    status = {}
+    def unnamed(key):
+        return key[0], tuple(item for item in key[1] if item[0] != "project")
+
+    elsewhere = {unnamed(key): dict(key[1]).get("project") for key in present}
+    status, renamed = {}, set()
     for key, (_, value) in series.items():
-        if key not in present:
+        if key not in present and unnamed(key) in elsewhere:
+            # The same session was already imported under another project name.
+            status[key] = "conflict"
+            renamed.add((elsewhere[unnamed(key)], dict(key[1]).get("project")))
+        elif key not in present:
             status[key] = "new"
         elif same(present[key], value):
             status[key] = "imported"
@@ -521,6 +544,9 @@ def main():
     print("Records by agent version: " + ", ".join(f"{v}={n}" for v, n in sorted(scan.versions.items())))
 
     conflicts = [key for key, s in status.items() if s == "conflict"]
+    for before, after in sorted(renamed):
+        print(f"\nSessions already imported as project {before!r} are not exported again as {after!r}; "
+              f"delete the {before!r} backfill first to rename them.")
     if conflicts:
         print(f"\n{len(conflicts)} series differ from already imported data and are NOT exported "
               "(scan all sources of these sessions together):")

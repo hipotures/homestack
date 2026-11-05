@@ -389,6 +389,9 @@ scripts/ai-usage-backfill.py --agent codex --source /archive/codex --output code
 `--source` (repeatable) replaces the default `~/.claude/projects` or
 `~/.codex/sessions`; `--host` names the server for archives copied elsewhere;
 `--project` (repeatable) limits the report and output to selected projects.
+`--prom-project NAME` stores all selected projects under one Prometheus
+project, e.g. a removed worktree directory of the same repository. Sessions
+already imported under another project name are reported, not exported again.
 The report lists projects, UTC ranges, responses, tokens and sessions, skipped
 records by reason and records by agent version. Only timestamps inside records
 are used, never file or directory names (Codex names them in local time);
