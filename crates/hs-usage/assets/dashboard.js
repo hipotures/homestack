@@ -114,7 +114,7 @@
     });
     // Series without a single nonzero value are dropped, and a panel with no series is not shown.
     const add=(id,title,unit,data,options={})=>{data=data.filter(s=>AIUsage.nonEmpty([{data:s.points}]).length);if(data.length)list.push({id,title,unit,series:data,sourceIds:[...new Set(data.map(s=>s.dataset))],...options});};
-    const timeline=d=>[{id:d.agent,label:agents[d.agent]+(d.agent==="codex"&&d.measurement==="cost"?" (estimated)":""),points:d.details?.timeline||[]}];
+    const timeline=d=>[{id:d.agent,label:agents[d.agent]+(d.details?.estimated&&d.measurement==="cost"?" (estimated)":""),points:d.details?.timeline||[]}];
     const byKind=(key,items)=>d=>items(d).map(s=>({...s,label:agents[d.agent]+" · "+key(s)}));
     add("cost","Cost over time","USD",parts("cost",timeline));
     add("models-cost","Cost by model","USD",parts("cost",byKind(s=>s.dimensions.model,d=>d.series)),{stack:true});
@@ -255,7 +255,7 @@
     const outputBody=output?`<div class="stack"><div class="split" aria-hidden="true"><span style="width:${(share||0)*100}%;background:var(--tok-reasoning)"></span><span style="width:${(1-(share||0))*100}%;background:var(--tok-output)"></span></div>
       <div class="legend-row"><span>${share==null?"reasoning not reported":`<span style="color:var(--tok-reasoning)">●</span> reasoning ${F.tokens(reasoning)} · ${Math.round(share*100)}%`}</span><span>response ${F.tokens(output-(reasoning||0))}</span></div></div>`:"";
     $("kpis").innerHTML=[
-      kpi("Cost",F.cost(totals.cost?.value),delta(totals.cost?.value,previous.cost),sparkline(spark(cost),lead),split("cost",summary),"Codex cost is estimated from standard API prices",F.cost(totals.cost?.value,true)),
+      kpi("Cost",F.cost(totals.cost?.value),delta(totals.cost?.value,previous.cost),sparkline(spark(cost),lead),split("cost",summary),"Codex and Antigravity costs are estimated from standard API prices",F.cost(totals.cost?.value,true)),
       kpi("Tokens",F.tokens(totals.total?.value),delta(totals.total?.value,previous.total),sparkline(spark(totalSeries),lead),split("total",summary),"",F.full(totals.total?.value)),
       kpi("Cache hit",totals.cacheHit?.value==null?"—":F.pct(totals.cacheHit.value*100),delta(totals.cacheHit?.value,previous.cacheHit,{goodUp:true,points:true}),hitBars,hitNote),
       kpi("Output",F.tokens(output),delta(output,previous.output),sparkline(spark(outputs),getComputedStyle(document.documentElement).getPropertyValue("--tok-output").trim()),outputBody,"Output includes reasoning tokens",F.full(output)),
@@ -363,7 +363,7 @@
     const fmtShort=unit==="cost"?v=>F.cost(v):F.tokens,fmtFull=unit==="cost"?v=>F.cost(v,true):F.full;
     const first=Math.min(...rows.flatMap(r=>r.points.filter(([,v])=>v>0).map(([t])=>t))),times=buckets(range).filter(t=>t>=first);
     $("scopes-title").textContent=`${unit==="cost"?"Cost":"Tokens"} by ${names[by]}`;
-    $("scopes-sub").textContent=`${bucketLabel(range.step)} · stacked by ${names[by]}${unit==="cost"&&chosen().includes("codex")?" · Codex cost estimated":""}`;
+    $("scopes-sub").textContent=`${bucketLabel(range.step)} · stacked by ${names[by]}${unit==="cost"&&chosen().some(a=>["codex","antigravity"].includes(a))?" · Codex/Antigravity cost estimated":""}`;
     $("scopes-chips").innerHTML=[first>range.start?`<span class="chip">data since ${timeLabel(first,range)}</span>`:"",...(unit==="cost"?d.warnings:[]).map(w=>`<span class="chip">${esc(w)}</span>`)].join("");
     scopesChart=scopesChart||AIUsage.init($("scopes-chart"));
     scopesChart.setOption({
@@ -402,7 +402,7 @@
     $("models").innerHTML=`<div><h2>Cost by model</h2><div class="sub">${active.length} of ${rows.length} models active in this range</div></div>
       <div class="bars">${active.map(r=>{const key=`${agents[r.agent]} · ${r.model}`,color=AIUsage.colorFor(key);return `<div class="model"><div class="head"><span class="name"><i class="sw" style="background:${color}"></i>${esc(r.model)}</span><span class="cost" title="${r.cost==null?"":F.cost(r.cost,true)}">${r.cost==null?"—":F.cost(r.cost)}</span></div>
         <div class="track thick" aria-hidden="true"><span style="width:${max&&r.cost?Math.max(1,r.cost/max*100):0}%;background:${color}"></span></div>
-        <div class="meta"><span title="${F.full(r.tokens)}">${F.tokens(r.tokens)} tokens</span>${r.cost&&r.tokens?`<span>${F.cost(r.cost/r.tokens*1e6)} / 1M</span>`:""}${r.agent==="codex"?`<span>${r.cost==null?"no price":"estimated price"}</span>`:""}</div></div>`;}).join("")}
+        <div class="meta"><span title="${F.full(r.tokens)}">${F.tokens(r.tokens)} tokens</span>${r.cost&&r.tokens?`<span>${F.cost(r.cost/r.tokens*1e6)} / 1M</span>`:""}${["codex","antigravity"].includes(r.agent)?`<span>${r.cost==null?"no price":"estimated price"}</span>`:""}</div></div>`;}).join("")}
       ${idle.map((r,i)=>`<div class="idle${i?"":" first"}"><span class="name"><i class="sw" style="background:${AIUsage.colorFor(`${agents[r.agent]} · ${r.model}`)}"></i>${esc(r.model)}</span><span class="num">—</span></div>`).join("")}</div>`;
   }
   function renderHeat() {

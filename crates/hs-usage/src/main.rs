@@ -77,7 +77,7 @@ async fn main() -> ExitCode {
     let pricing = match fetch_pricing(&client).await {
         Ok(prices) => Some(prices),
         Err(error) => {
-            tracing::warn!(%error, "Codex cost estimates unavailable; restart to retry pricing download");
+            tracing::warn!(%error, "cost estimates unavailable; restart to retry pricing download");
             None
         }
     };
@@ -145,19 +145,30 @@ async fn fetch_pricing(client: &reqwest::Client) -> Result<serde_json::Value, St
         "cache_read_input_token_cost",
         "cache_creation_input_token_cost",
     ];
-    let mut prices: serde_json::Map<String, serde_json::Value> = entries
-        .iter()
-        .filter(|(_, value)| value["litellm_provider"] == "openai")
-        .map(|(name, value)| {
+    let mut prices = serde_json::Map::new();
+    for provider in [
+        "vertex_ai-anthropic_models",
+        "vertex_ai-language-models",
+        "vertex_ai",
+        "gemini",
+        "anthropic",
+        "openai",
+    ] {
+        for (name, value) in entries {
+            if value["litellm_provider"] != provider {
+                continue;
+            }
             let rates: serde_json::Map<String, serde_json::Value> = fields
                 .iter()
                 .filter_map(|field| value.get(*field).map(|rate| ((*field).to_owned(), rate.clone())))
                 .collect();
-            (name.clone(), serde_json::Value::Object(rates))
-        })
-        .collect();
+            let short = name.rsplit_once('/').map_or(name.as_str(), |(_, short)| short);
+            prices.insert(short.to_owned(), serde_json::Value::Object(rates.clone()));
+            prices.insert(name.clone(), serde_json::Value::Object(rates));
+        }
+    }
     if prices.is_empty() {
-        return Err("No OpenAI prices in LiteLLM catalog".to_owned());
+        return Err("No model prices in LiteLLM catalog".to_owned());
     }
     // Codex approval reviews run on a separate model at no charge and are absent from the catalog.
     prices.insert(

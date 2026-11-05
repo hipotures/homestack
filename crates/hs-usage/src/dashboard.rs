@@ -511,7 +511,7 @@ fn agent_data(
     );
     tokens.total = sum_category(&tokens, "total");
     if agent == "antigravity" {
-        tokens.warnings.push("Token counts come from Antigravity CLI's internal per-invocation transcript schema, verified with 1.5.0. Unavailable or invalid observations are omitted. Thinking tokens and subscription costs are not reported separately.".into());
+        tokens.warnings.push("Token counts come from Antigravity CLI's internal per-invocation transcript schema, verified with 1.5.0. Unavailable or invalid observations are omitted. Thinking tokens are not reported separately; cost is estimated from standard API rates.".into());
     }
     let effort = make(
         agent,
@@ -523,7 +523,7 @@ fn agent_data(
         registry.iter().any(|m| m.measurement == "tokens"),
     );
     let mut output = Vec::new();
-    let mut cost = if agent == "codex" {
+    let mut cost = if matches!(agent, "codex" | "antigravity") {
         let mut models: BTreeMap<String, BTreeMap<u64, f64>> = BTreeMap::new();
         let mut missing = BTreeSet::new();
         for s in &tokens.series {
@@ -538,7 +538,7 @@ fn agent_data(
             };
             let price = prices
                 .as_ref()
-                .and_then(|p| p.get(model.strip_prefix("openai/").unwrap_or(model)))
+                .and_then(|p| lookup_price(p, model))
                 .and_then(|p| p[field].as_f64())
                 .filter(|v| v.is_finite() && *v >= 0.);
             if price.is_none() && s.points.iter().any(|(_, v)| *v > 0.) {
@@ -554,21 +554,31 @@ fn agent_data(
             .into_iter()
             .map(|(name, points)| ((name, "estimated".into()), points))
             .collect();
-        let mut d = make(agent, "cost", "USD", selection, range, series(groups, "kind"), true);
-        if prices.is_none() || !missing.is_empty() {
-            d.state = Availability::Partial;
-            // Priced models still sum to a lower-bound estimate; without a catalog there is none.
-            if prices.is_none() {
-                d.total = None;
+        let mut d = make(
+            agent,
+            "cost",
+            "USD",
+            selection,
+            range,
+            series(groups, "kind"),
+            registry.iter().any(|m| m.measurement == "tokens"),
+        );
+        if !d.series.is_empty() || !missing.is_empty() {
+            if prices.is_none() || !missing.is_empty() {
+                d.state = Availability::Partial;
+                // Priced models still sum to a lower-bound estimate; without a catalog there is none.
+                if prices.is_none() {
+                    d.total = None;
+                }
+                d.warnings.push(if prices.is_none() {
+                    "Pricing unavailable; restart the service to retry the startup catalog".into()
+                } else {
+                    format!(
+                        "Incomplete estimate; missing prices for {}",
+                        missing.into_iter().collect::<Vec<_>>().join(", ")
+                    )
+                });
             }
-            d.warnings.push(if prices.is_none() {
-                "Pricing unavailable; restart the service to retry the startup catalog".into()
-            } else {
-                format!(
-                    "Incomplete estimate; missing prices for {}",
-                    missing.into_iter().collect::<Vec<_>>().join(", ")
-                )
-            });
         }
         d.details = json!({"estimated":true,"basis":"Standard API rates from the startup LiteLLM catalog; not subscription charges"});
         d
@@ -844,6 +854,25 @@ fn sum_category(dataset: &Dataset, category: &str) -> Option<f64> {
         .filter(|s| s.dimensions.get("category").is_some_and(|c| c == category))
         .collect();
     (!rows.is_empty()).then(|| rows.iter().flat_map(|s| &s.points).map(|(_, v)| v).sum())
+}
+fn lookup_price<'a>(prices: &'a Value, model: &str) -> Option<&'a Value> {
+    let base = model.rsplit_once('/').map_or(model, |(_, short)| short);
+    let stripped = ["minimal", "low", "medium", "high", "xhigh", "max"]
+        .into_iter()
+        .find_map(|effort| base.strip_suffix(&format!("-{effort}")))
+        .unwrap_or(base);
+    for candidate in [
+        model,
+        base,
+        stripped,
+        &format!("{base}-preview"),
+        &format!("{stripped}-preview"),
+    ] {
+        if let Some(entry) = prices.get(candidate) {
+            return Some(entry);
+        }
+    }
+    None
 }
 fn normalize(
     global: &Global,

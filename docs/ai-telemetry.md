@@ -69,7 +69,9 @@ current row is missing. The internal transcript schema was checked with 1.5.0:
 `output_tokens` is output. Cache creation is included only if explicitly
 reported. Missing/invalid counters are omitted, and a missing observation is
 not zero usage. This internal schema may change with an AGY update; recheck
-it after upgrading. Thinking tokens and subscription costs are not estimated.
+it after upgrading. Thinking tokens are not reported separately; like Codex,
+Antigravity cost is estimated from standard API prices in the startup LiteLLM
+catalog rather than subscription charges.
 No historical transcript backfill or export retry is performed.
 
 Account quota history continues to come from the existing **Agent Accounts**
