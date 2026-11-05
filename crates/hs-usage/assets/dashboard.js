@@ -374,7 +374,7 @@
     scopesChart=scopesChart||AIUsage.init($("scopes-chart"));
     scopesChart.setOption({
       grid:{left:8,right:8,top:16,bottom:36,containLabel:true},
-      legend:{type:"scroll",left:"center",right:"auto",top:"auto",bottom:0,formatter:name=>`${name}  ${fmtShort(rows.find(r=>r.name===name)?.sum||0)}`},
+      legend:{type:"scroll",left:"center",right:"auto",top:"auto",bottom:0,data:rows.map(r=>r.name),formatter:name=>`${name}  ${fmtShort(rows.find(r=>r.name===name)?.sum||0)}`},
       tooltip:{trigger:"axis",formatter:AIUsage.tooltipFormatter(fmtFull)},
       xAxis:{type:"time",min:(first-range.step/2)*1000,max:range.end*1000,axisLabel:{hideOverlap:true}},
       yAxis:{type:"value",axisLabel:{formatter:fmtShort}},
