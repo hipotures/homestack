@@ -39,7 +39,7 @@
     return span?`${day(+span[1])}–${day(+span[2]-1)}`:({"180d":"180 days","1y":"1 year","all":"All"}[range]||"More");
   }
   function select(next,sync) {
-    epoch++; selection={...next}; document.documentElement.dataset.agent=selection.agent; snapshot=undefined;
+    epoch++; brush=null; selection={...next}; document.documentElement.dataset.agent=selection.agent; snapshot=undefined;
     try {for(const [key,value] of Object.entries(next))localStorage.setItem(key,value);}catch(_){}
     return epoch;
   }
@@ -317,6 +317,46 @@
     }
     return {events,areas,end};
   }
+  // Shift+drag on the trend marks whole buckets and totals the drawn values; Esc, a plain click or ✕ clears it.
+  let brush=null,trendView=null;
+  const stamp=t=>{const d=new Date(t*1000);return `${two(d.getDate())}.${two(d.getMonth()+1)} ${two(d.getHours())}:${two(d.getMinutes())}`;};
+  function brushParts(){
+    const v=trendView;
+    if(!brush||!v)return null;
+    const lo=Math.min(brush.from,brush.to)/1000,hi=Math.max(brush.from,brush.to)/1000,half=v.range.step/2;
+    const picked=v.times.filter(t=>t+half>lo&&t-half<hi);
+    if(!picked.length)return null;
+    const rows=v.visible.map(s=>{const m=new Map(s.points);return {name:s.name,color:s.color||AIUsage.colorFor(s.key||s.name),value:picked.reduce((n,t)=>n+(m.get(t)||0),0)};}).filter(r=>r.value>0).sort((a,b)=>b.value-a.value);
+    return {start:picked[0],end:picked[picked.length-1]+v.range.step,rows,total:rows.reduce((n,r)=>n+r.value,0)};
+  }
+  function brushChips(parts){
+    if(!parts)return "";
+    const f=trendView.fmtFull;
+    return `<span class="chip"><strong>${stamp(parts.start)} – ${stamp(parts.end)} · ${esc(f(parts.total))}</strong></span>`
+      +parts.rows.map(r=>`<span class="chip"><span style="color:${esc(r.color)}">●</span> ${esc(r.name)} ${esc(f(r.value))}</span>`).join("")
+      +`<button type="button" class="chip" id="brush-clear" style="border:0;cursor:pointer" aria-label="Clear selection" title="Clear selection (Esc)">✕</button>`;
+  }
+  const brushSeries=parts=>({id:"selection",type:"line",data:[],silent:true,markArea:{silent:true,
+    itemStyle:{color:getComputedStyle(document.documentElement).getPropertyValue("--text-2").trim()||"#888",opacity:.12},
+    data:parts?[[{xAxis:(parts.start-trendView.range.step/2)*1000},{xAxis:(parts.end-trendView.range.step/2)*1000}]]:[]}});
+  function paintBrush(){
+    if(!trendView)return;
+    const parts=brushParts();
+    $("trend-chips").innerHTML=trendView.chips+brushChips(parts);
+    trendChart.setOption({series:[brushSeries(parts)]});
+  }
+  function clearBrush(){if(brush){brush=null;paintBrush();}}
+  function bindBrush(chart){
+    const zr=chart.getZr(),at=e=>chart.convertFromPixel({gridIndex:0},[e.offsetX,e.offsetY])[0];
+    let dragging=false;
+    zr.on("mousedown",e=>{
+      if(!e.event.shiftKey||!trendView||!chart.containPixel({gridIndex:0},[e.offsetX,e.offsetY]))return;
+      e.event.preventDefault();dragging=true;brush={from:at(e),to:at(e)};paintBrush();
+    });
+    zr.on("mousemove",e=>{if(dragging){brush.to=at(e);paintBrush();}});
+    zr.on("click",e=>{if(!e.event.shiftKey)clearBrush();});
+    window.addEventListener("mouseup",()=>{dragging=false;});
+  }
   function renderTrend(range,firstActive) {
     const sel=chosen(),series=[];
     if(metric==="types"){
@@ -336,10 +376,12 @@
     const stack=sumPoints(visible.map(s=>s.points)),first=($("limit-events").checked||$("limit-periods").checked)?range.start:Number.isFinite(firstActive)?firstActive:range.start;
     const fmtShort=metric==="cost"?v=>F.cost(v):F.tokens,fmtFull=metric==="cost"?v=>F.cost(v,true):F.full;
     $("trend-title").textContent=metric==="cost"?"Cost over time":"Tokens over time";
-    $("trend-sub").textContent=`${bucketLabel(range.step)} · stacked by ${metric==="types"?"token type":"model"}`;
+    $("trend-sub").textContent=`${bucketLabel(range.step)} · stacked by ${metric==="types"?"token type":"model"} · Shift+drag to sum a span`;
     for(const b of document.querySelectorAll("[data-metric]"))b.setAttribute("aria-pressed",String(b.dataset.metric===metric));
     $("trend-legend").innerHTML=visible.map(s=>`<span><i class="sw" style="background:${s.color||AIUsage.colorFor(s.key||s.name)}"></i>${esc(s.name)}</span>`).join("");
-    $("trend-chips").innerHTML=first>range.start?`<span class="chip">data since ${timeLabel(first,range)}</span>`:"";
+    trendView={visible,times:times.filter(t=>t>=first),range,fmtFull,chips:first>range.start?`<span class="chip">data since ${timeLabel(first,range)}</span>`:""};
+    const selected=brushParts();
+    $("trend-chips").innerHTML=trendView.chips+brushChips(selected);
     const peak=[...stack].filter(([t])=>t>=first).reduce((m,p)=>p[1]>m[1]?p:m,[0,0]);
     const usageTooltip=AIUsage.tooltipFormatter(fmtFull);
     const eventTooltip=events=>events.map(e=>`<div style="margin-top:6px"><span style="color:${esc(e.lineStyle.color)}">●</span> ${esc(e.name)}<br><span style="color:var(--muted)">${esc(new Date(e.xAxis).toLocaleString())}</span></div>`).join("");
@@ -354,7 +396,7 @@
       const events=overlay.events.filter(e=>e.xAxis===time);
       return {...events[0],label:{formatter:events.map(e=>e.label.formatter).join("\n")},tooltip:{trigger:"item",formatter:()=>eventTooltip(events)}};
     });
-    trendChart=trendChart||AIUsage.init($("trend-chart"));
+    if(!trendChart){trendChart=AIUsage.init($("trend-chart"));bindBrush(trendChart);}
     trendChart.setOption({
       grid:{left:8,right:8,top:36,bottom:8,containLabel:true},
       tooltip:{trigger:"axis",formatter:params=>usageTooltip(params)+eventTooltip(eventsByBucket.get(Number(params[0]?.axisValue)/1000)||[])},
@@ -368,7 +410,7 @@
       })), {id:"quota-overlay",type:"line",data:[],showSymbol:false,silent:false,
         markLine:{symbol:["none","none"],lineStyle:{type:"dashed",width:1.5},label:{show:true,position:"insideEndTop",fontSize:10,color:css("--muted"),backgroundColor:css("--bg"),padding:3},data:markerEvents},
         markArea:{silent:false,label:{show:true,position:"insideTopRight",distance:8,color:css("--muted"),fontSize:10,overflow:"truncate",width:210},tooltip:{formatter:p=>esc(p.name)},data:overlay.areas}
-      }],
+      },brushSeries(selected)],
     },{replaceMerge:["series"]});
   }
   // Breakdown by the scopes left at "all"; it follows the trend metric (token types count as tokens).
@@ -712,6 +754,8 @@
       copy.onclick=()=>{if(v.spec)copyCharts(copy,[v.spec]);};
     }
     for(const b of document.querySelectorAll("[data-scope-by]"))b.onclick=()=>{scopeBy=b.dataset.scopeBy;try{localStorage.setItem("scopeBy",scopeBy);}catch(_){}if(datasets.size)renderOverview();};
+    $("trend-chips").onclick=event=>{if(event.target.closest("#brush-clear"))clearBrush();};
+    document.addEventListener("keydown",event=>{if(event.key==="Escape")clearBrush();});
     for(const b of document.querySelectorAll("[data-metric]"))b.onclick=()=>{metric=b.dataset.metric;try{localStorage.setItem("metric",metric);}catch(_){}if(datasets.size)renderOverview();};
     $("agents").onclick=event=>{
       const tab=event.target.closest("[data-tab]"),goto=event.target.closest("[data-goto]");
