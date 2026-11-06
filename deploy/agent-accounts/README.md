@@ -215,7 +215,7 @@ prevents two service processes from sharing credentials and running probes.
 
 Open **Provider runtimes**, click **Check available version**, then **Upgrade**
 when a newer stable version is available. Checking versions installs nothing.
-An upgrade stages an official versioned musl download, validates its official
+An upgrade to a new version stages an official versioned musl download, validates its official
 SHA-256 and reported version, and performs an account-limits probe using one
 enabled authenticated profile. Only then does one SQLite transaction activate
 the pin and store the real measurement. Candidate verification excludes other
@@ -229,11 +229,24 @@ at startup, without automatically resuming an upgrade. Interrupted operations
 remain visible; inspect the active pin if the process stopped during completion.
 A runtime upgrade never copies or replaces profile credentials.
 
+When an older installation is retained, **Rollback** asks for confirmation
+before selecting it. It verifies that the retained binary reports the expected
+version and successfully probes real account limits before atomically changing
+the pin. A failed check leaves the active version unchanged. Both installations
+remain available after the switch. The newest known release remains visible,
+and **Upgrade** can reactivate the retained newer installation after the same
+verification, without downloading it again. Runtime rollback does not replace
+the service image or revert account credentials, measurements or history.
+
 REST operations:
 
 - POST `runtimes/<provider>/check` with `{}` checks the official stable release.
 - POST `runtimes/<provider>/upgrade` with `{"version":"X.Y.Z"}` explicitly
   selects a stable vendor release. The UI selects the discovered latest version.
+- POST `runtimes/<provider>/rollback` with
+  `{"version":"X.Y.Z","confirm":true}` selects the currently retained older
+  installation. Missing confirmation or a changed retained version prevents
+  activation. The upgrade endpoint refuses downgrades without this action.
 - Both return operation IDs; GET/SSE progress uses the ordinary operations API.
 - Candidate downloads are limited to 512 MiB, metadata to 2 MiB. The upgrade
   deadline is ten minutes; the real quota-probe deadline remains 60 seconds.

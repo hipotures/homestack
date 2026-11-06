@@ -67,6 +67,7 @@ a { color: var(--tok-uncached); overflow-wrap: anywhere; }
 .runtimes { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: var(--gap-grid); }
 .runtime { background: var(--surface-2); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
 .runtime .actions { margin-top: 4px; justify-content: flex-start; }
+.runtime .seg { flex-wrap: wrap; max-width: 100%; }
 
 /* messages and footer */
 .error { color: var(--up); font-size: var(--fs-small); }

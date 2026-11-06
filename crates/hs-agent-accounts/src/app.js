@@ -182,11 +182,18 @@ async function refresh() {
     const row = node('article', undefined, `runtime provider-${runtime.provider}`), head = node('div', undefined, 'card-head');
     head.append(node('h3', runtimeName(runtime.provider)), node('span', `${runtime.version} pinned · latest ${runtime.latest_version || 'not checked'}`, 'num sub'));
     row.append(head, node('span', `Version checked ${time(runtime.checked_at)} · usage verified ${time(runtime.verified_at)}`, 'meta'));
-    if (runtime.previous_version) row.append(node('span', `Previous working version retained: ${runtime.previous_version}`, 'meta'));
+    if (runtime.previous_version) row.append(node('span', `Retained version: ${runtime.previous_version}`, 'meta'));
     if (runtime.last_result) row.append(node('p', runtime.last_result, runtime.last_error ? 'error' : 'meta'));
     const actions = node('div', undefined, 'actions'), group = node('div', undefined, 'seg');
     button(group, 'Check available version', () => backgroundOperation(`/runtimes/${runtime.provider}/check`, {}), `version:${runtime.provider}`);
     button(group, 'Upgrade', () => backgroundOperation(`/runtimes/${runtime.provider}/upgrade`, { version: runtime.latest_version }), `upgrade:${runtime.provider}`, !runtime.latest_version || compareVersions(runtime.latest_version, runtime.version) <= 0);
+    if (runtime.previous_version && compareVersions(runtime.previous_version, runtime.version) < 0) {
+      button(group, 'Rollback', async () => {
+        if (confirm(`Roll back ${runtimeName(runtime.provider)} from ${runtime.version} to ${runtime.previous_version}? The retained version will be checked before activation. Account credentials and history are preserved.`)) {
+          await backgroundOperation(`/runtimes/${runtime.provider}/rollback`, { version: runtime.previous_version, confirm: true });
+        }
+      }, `rollback:${runtime.provider}`);
+    }
     actions.append(group); row.append(actions); $('#runtimes').append(row);
   }
   setText($('#versions'), [appVersion, ...runtimes.map(r => `${runtimeName(r.provider)} ${r.version}`)].join(' · '));

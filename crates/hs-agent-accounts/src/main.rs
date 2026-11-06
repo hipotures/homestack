@@ -149,6 +149,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/runtimes", get(runtimes))
         .route("/api/v1/runtimes/{provider}/check", post(check_runtime))
         .route("/api/v1/runtimes/{provider}/upgrade", post(upgrade_runtime))
+        .route("/api/v1/runtimes/{provider}/rollback", post(rollback_runtime))
         .route("/api/v1/operations/{id}", get(operation).delete(cancel_operation))
         .route("/api/v1/operations/{id}/events", get(events))
         .route("/api/v1/health", get(api_health))
@@ -381,14 +382,39 @@ async fn check_runtime(
     State(c): State<Arc<Context>>,
     Path(provider): Path<String>,
 ) -> Result<(StatusCode, Json<Operation>)> {
-    Ok(accepted(c.runtime_operation(&provider, None)?))
+    Ok(accepted(c.runtime_operation(&provider, runtime::RuntimeAction::Check)?))
 }
 async fn upgrade_runtime(
     State(c): State<Arc<Context>>,
     Path(provider): Path<String>,
     Json(v): Json<Upgrade>,
 ) -> Result<(StatusCode, Json<Operation>)> {
-    Ok(accepted(c.runtime_operation(&provider, Some(v.version))?))
+    Ok(accepted(c.runtime_operation(
+        &provider,
+        runtime::RuntimeAction::Upgrade(v.version),
+    )?))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Rollback {
+    version: String,
+    confirm: bool,
+}
+async fn rollback_runtime(
+    State(c): State<Arc<Context>>,
+    Path(provider): Path<String>,
+    Json(v): Json<Rollback>,
+) -> Result<(StatusCode, Json<Operation>)> {
+    if !v.confirm {
+        return Err(Failure::new(
+            "confirmation_required",
+            "Confirm the selected runtime rollback",
+        ));
+    }
+    Ok(accepted(c.runtime_operation(
+        &provider,
+        runtime::RuntimeAction::Rollback(v.version),
+    )?))
 }
 async fn runtimes(State(c): State<Arc<Context>>) -> Result<Json<Vec<Runtime>>> {
     let mut rs = Vec::new();

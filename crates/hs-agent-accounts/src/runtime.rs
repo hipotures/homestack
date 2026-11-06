@@ -22,7 +22,19 @@ fn version(value: &str) -> bool {
         && value.split('.').count() == 3
         && value
             .split('.')
-            .all(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+            .all(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) && n.parse::<u64>().is_ok())
+}
+fn version_numbers(value: &str) -> Result<Vec<u64>> {
+    value
+        .split('.')
+        .map(|part| part.parse().map_err(|_| failure("Invalid recorded runtime version")))
+        .collect()
+}
+
+pub enum RuntimeAction {
+    Check,
+    Upgrade(String),
+    Rollback(String),
 }
 fn client() -> Result<reqwest::Client> {
     reqwest::Client::builder()
@@ -269,7 +281,12 @@ pub async fn verify_version(ctx: &Context, provider: &str, path: &Path, selected
 }
 
 impl Context {
-    pub fn runtime_operation(self: &Arc<Self>, provider: &str, selected: Option<String>) -> Result<Operation> {
+    pub fn runtime_operation(self: &Arc<Self>, provider: &str, action: RuntimeAction) -> Result<Operation> {
+        let (kind, selected, rollback) = match action {
+            RuntimeAction::Check => ("update_check", None, false),
+            RuntimeAction::Upgrade(version) => ("upgrade", Some(version), false),
+            RuntimeAction::Rollback(version) => ("rollback", Some(version), true),
+        };
         if !self.provider(provider)?.capabilities().contains(&"runtime_updates") {
             return Err(Failure::unsupported());
         }
@@ -279,7 +296,6 @@ impl Context {
                 "Select an explicit numeric runtime version",
             ));
         }
-        let kind = if selected.is_some() { "upgrade" } else { "update_check" };
         let mut jobs = self.jobs.lock().unwrap_or_else(PoisonError::into_inner);
         if jobs
             .values()
@@ -329,45 +345,108 @@ impl Context {
         let provider = provider.to_owned();
         tokio::spawn(async move {
             let stage = ctx.root.join("state").join(format!("runtime-{}", uuid::Uuid::new_v4()));
-            let result=process::bounded(&cancel,600,async {
-                let gate=ctx.gates.get(&provider).ok_or_else(Failure::unsupported)?;let _exclusive=gate.write().await;
-                let _slot=ctx.slots.acquire().await.map_err(|_|failure("Service is stopping"))?;
-                let mut runtime=ctx.db.runtime(&provider)?.ok_or_else(Failure::unsupported)?;
-                ctx.update_operation(&id,|o|{o.status="running".into();o.message=if selected.is_some(){"Preparing a verified runtime candidate"}else{"Checking official stable releases"}.into();});
-                if let Some(selected)=&selected {
-                    // Fail before downloading if no real account can verify this candidate.
-                    let p=ctx.db.profiles()?.into_iter().find(|p|p.provider==provider&&p.enabled&&!p.deleting&&p.auth_status=="authenticated").ok_or_else(||Failure::new("verification_blocked","Enable and authenticate a profile before upgrading; the previous pin is retained"))?;
-                    if *selected==runtime.version {return Err(Failure::new("invalid_input","This runtime version is already pinned"));}
-                    let lock=ctx.lock(&p.id);let _profile=lock.lock().await;
-                    let p=ctx.db.profile(&p.id)?;
-                    if !p.enabled||p.deleting||p.auth_status!="authenticated" {return Err(Failure::new("verification_blocked","The verification profile is no longer available"));}
+            let result = process::bounded(&cancel, 600, async {
+                let gate = ctx.gates.get(&provider).ok_or_else(Failure::unsupported)?;
+                let _exclusive = gate.write().await;
+                let _slot = ctx.slots.acquire().await.map_err(|_| failure("Service is stopping"))?;
+                let mut runtime = ctx.db.runtime(&provider)?.ok_or_else(Failure::unsupported)?;
+                ctx.update_operation(&id, |o| {
+                    o.status = "running".into();
+                    o.message = if rollback {
+                        "Verifying the retained runtime"
+                    } else if selected.is_some() {
+                        "Preparing a verified runtime candidate"
+                    } else {
+                        "Checking official stable releases"
+                    }.into();
+                });
+                let Some(selected) = &selected else {
+                    let data = metadata(&provider, None).await?;
+                    runtime.latest_version = Some(release_version(&provider, &data)?);
+                    runtime.checked_at = Some(now());
+                    ctx.db.save_runtime(&runtime)?;
+                    return Ok(json!({"latest_version":runtime.latest_version,"checked_at":runtime.checked_at}));
+                };
+                if *selected == runtime.version {
+                    return Err(Failure::new("invalid_input", "This runtime version is already pinned"));
+                }
+                let retained = runtime.previous_version.as_deref() == Some(selected);
+                if rollback && !retained {
+                    return Err(Failure::new("invalid_input", "The retained version changed; refresh before rolling back"));
+                }
+                let older = version_numbers(selected)? < version_numbers(&runtime.version)?;
+                if rollback && !older {
+                    return Err(Failure::new("invalid_input", "Rollback requires the retained older version"));
+                }
+                if !rollback && older {
+                    return Err(Failure::new("confirmation_required", "Use the confirmed rollback action to select an older runtime"));
+                }
+                let p = ctx.db.profiles()?.into_iter().find(|p| {
+                    p.provider == provider && p.enabled && !p.deleting && p.auth_status == "authenticated"
+                }).ok_or_else(|| Failure::new(
+                    "verification_blocked", "Enable and authenticate a profile before changing runtimes; the active pin is retained",
+                ))?;
+                let lock = ctx.lock(&p.id);
+                let _profile = lock.lock().await;
+                let p = ctx.db.profile(&p.id)?;
+                if !p.enabled || p.deleting || p.auth_status != "authenticated" {
+                    return Err(Failure::new("verification_blocked", "The verification profile is no longer available"));
+                }
+                let parent = ctx.root.join("runtimes").join(&provider);
+                let destination = parent.join(selected);
+                let binary = if retained {
+                    process::directory(&parent)?;
+                    process::directory(&destination)?;
+                    let binary = destination.join(&provider);
+                    if !binary.is_file() || binary.is_symlink() {
+                        return Err(failure("The retained runtime executable is missing or unsafe"));
+                    }
+                    verify_version(&ctx, &provider, &binary, selected).await?;
+                    binary
+                } else {
+                    if destination.exists() {
+                        return Err(failure("Candidate version directory already exists; active pin retained"));
+                    }
                     process::directory(&stage)?;
-                    let binary=candidate(&ctx,&provider,selected,&stage).await?;
-                    ctx.update_operation(&id,|o|o.message="Candidate starts correctly; verifying real account limits".into());
-                    let snapshot=process::bounded(&cancel,60,ctx.provider(&provider)?.probe(&ctx,&p,Some(&binary))).await?;
-                    if cancel.is_cancelled() {return Err(Failure::new("cancelled","Upgrade cancelled before activation"));}
-                    let parent=ctx.root.join("runtimes").join(&provider);process::directory(&parent)?;
-                    let destination=parent.join(selected);
-                    if destination.exists() {return Err(failure("Candidate version directory already exists; previous pin retained"));}
-                    std::fs::rename(&stage,&destination).map_err(|_|failure("Cannot activate verified runtime installation"))?;
-                    runtime.previous_version=Some(runtime.version.clone());runtime.version=selected.clone();runtime.verified_at=Some(now());runtime.last_error=None;runtime.last_result=Some("Upgrade verified with a real account-limits probe".into());
-                    // One database transaction publishes both the new pin and its real observation.
-                    ctx.db.activate_runtime(&runtime,&p,&snapshot)?;
-                    // Retain the active and previous working installation, after activation only.
-                    if let Ok(entries) = std::fs::read_dir(&parent) {
-                        for entry in entries.flatten() {
-                            let name = entry.file_name().to_string_lossy().into_owned();
-                            if version(&name) && name != runtime.version && runtime.previous_version.as_deref() != Some(&name)
-                                && entry.file_type().is_ok_and(|t|t.is_dir()&&!t.is_symlink())
-                                && std::fs::remove_dir_all(entry.path()).is_err() {
-                                eprintln!("Runtime retirement failed; keeping an older installation");
-                            }
+                    candidate(&ctx, &provider, selected, &stage).await?
+                };
+                ctx.update_operation(&id, |o| o.message = "Runtime starts correctly; verifying real account limits".into());
+                let snapshot = process::bounded(&cancel, 60, ctx.provider(&provider)?.probe(&ctx, &p, Some(&binary))).await?;
+                if cancel.is_cancelled() {
+                    return Err(Failure::new("cancelled", "Runtime change cancelled before activation"));
+                }
+                let mut latest = runtime.latest_version.clone().unwrap_or_else(|| runtime.version.clone());
+                for known in [&runtime.version, selected] {
+                    if version_numbers(known)? > version_numbers(&latest)? { latest = known.clone(); }
+                }
+                if !retained {
+                    process::directory(&parent)?;
+                    std::fs::rename(&stage, &destination).map_err(|_| failure("Cannot activate verified runtime installation"))?;
+                }
+                runtime.latest_version = Some(latest);
+                runtime.previous_version = Some(runtime.version.clone());
+                runtime.version = selected.clone();
+                runtime.verified_at = Some(now());
+                runtime.last_error = None;
+                runtime.last_result = Some(if rollback {
+                    "Rollback verified with a real account-limits probe"
+                } else {
+                    "Upgrade verified with a real account-limits probe"
+                }.into());
+                // One database transaction publishes both the new pin and its real observation.
+                ctx.db.activate_runtime(&runtime, &p, &snapshot)?;
+                // Retain both installations so the operator can reverse this change.
+                if let Ok(entries) = std::fs::read_dir(&parent) {
+                    for entry in entries.flatten() {
+                        let name = entry.file_name().to_string_lossy().into_owned();
+                        if version(&name) && name != runtime.version && runtime.previous_version.as_deref() != Some(&name)
+                            && entry.file_type().is_ok_and(|t| t.is_dir() && !t.is_symlink())
+                            && std::fs::remove_dir_all(entry.path()).is_err() {
+                            eprintln!("Runtime retirement failed; keeping an older installation");
                         }
                     }
-                    Ok(json!({"version":runtime.version,"verified_at":runtime.verified_at,"previous_version":runtime.previous_version}))
-                } else {
-                    let data=metadata(&provider,None).await?;runtime.latest_version=Some(release_version(&provider,&data)?);runtime.checked_at=Some(now());ctx.db.save_runtime(&runtime)?;Ok(json!({"latest_version":runtime.latest_version,"checked_at":runtime.checked_at}))
                 }
+                Ok(json!({"version":runtime.version,"verified_at":runtime.verified_at,"previous_version":runtime.previous_version}))
             }).await;
             if stage.exists() {
                 let _ = tokio::fs::remove_dir_all(&stage).await;
@@ -377,7 +456,11 @@ impl Context {
                 && let Ok(Some(mut runtime)) = ctx.db.runtime(&provider)
             {
                 runtime.last_error = Some(e.clone());
-                runtime.last_result = Some(format!("Upgrade not activated; previous pin retained. {}", e.message));
+                runtime.last_result = Some(format!(
+                    "{} not activated; active pin retained. {}",
+                    if rollback { "Rollback" } else { "Upgrade" },
+                    e.message
+                ));
                 let _ = ctx.db.save_runtime(&runtime);
             }
             ctx.update_operation(&id, |o| {
@@ -385,7 +468,9 @@ impl Context {
                 match &result {
                     Ok(value) => {
                         o.status = "succeeded".into();
-                        o.message = if selected.is_some() {
+                        o.message = if rollback {
+                            "Rollback activated after account-limits verification"
+                        } else if selected.is_some() {
                             "Upgrade activated after account-limits verification"
                         } else {
                             "Available version checked; nothing installed"
@@ -394,9 +479,9 @@ impl Context {
                         o.result = Some(value.clone());
                     }
                     Err(e) => {
-                        o.status = if selected.is_some() { "rolled_back" } else { "failed" }.into();
+                        o.status = "failed".into();
                         o.message = if selected.is_some() {
-                            format!("Previous runtime pin retained. {}", e.message)
+                            format!("Active runtime pin retained. {}", e.message)
                         } else {
                             e.message.clone()
                         };

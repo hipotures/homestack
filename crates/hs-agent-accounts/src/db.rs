@@ -152,7 +152,7 @@ impl Database {
                 params![op.id, serde_json::to_string(&op).map_err(error)?],
             )
             .map_err(error)?;
-            if op.kind == "upgrade" {
+            if matches!(op.kind.as_str(), "upgrade" | "rollback") {
                 let data: Option<String> = db
                     .query_row("SELECT data FROM runtimes WHERE provider=?", [&op.provider], |r| {
                         r.get(0)
