@@ -285,7 +285,11 @@
         let wasFull=false,previous=0,previousReset=null;
         for(const t of [...new Set([...used.keys(),...exhausted.keys()])].sort((a,b)=>a-b)){
           const full=(used.get(t)??0)>=100||exhausted.get(t)===1,reset=resets.get(t);
-          if(full&&(!wasFull||(reset!=null&&previousReset!=null&&reset!==previousReset)||t-previous>(dataset?.details?.sample_step||300)*1.5)&&t>=range.start&&t<=range.end)events.push({xAxis:t*1000,name:`${who} · ${w.label} · limit exhausted (observed)`,lineStyle:{color:AIUsage.colorFor(agents[w.agent])}});
+          if(full&&(!wasFull||(reset!=null&&previousReset!=null&&reset!==previousReset)||t-previous>(dataset?.details?.sample_step||300)*1.5)&&t>=range.start&&t<=range.end){
+            const minutes=minutesAt(t),duration=minutes>0?(minutes%1440===0?`${minutes/1440}-day`:`${minutes/60}-hour`):null;
+            const kind=[w.label,duration].filter((v,i,a)=>v&&a.indexOf(v)===i).join(" · ");
+            events.push({xAxis:t*1000,name:`${who} · ${kind} · limit exhausted (observed)`,label:{formatter:`${agents[w.agent]} · ${kind}`},lineStyle:{color:AIUsage.colorFor(agents[w.agent])}});
+          }
           wasFull=full;previous=t;previousReset=reset;
         }
       }
@@ -337,10 +341,23 @@
     $("trend-legend").innerHTML=visible.map(s=>`<span><i class="sw" style="background:${s.color||AIUsage.colorFor(s.key||s.name)}"></i>${esc(s.name)}</span>`).join("");
     $("trend-chips").innerHTML=first>range.start?`<span class="chip">data since ${timeLabel(first,range)}</span>`:"";
     const peak=[...stack].filter(([t])=>t>=first).reduce((m,p)=>p[1]>m[1]?p:m,[0,0]);
+    const usageTooltip=AIUsage.tooltipFormatter(fmtFull);
+    const eventTooltip=events=>events.map(e=>`<div style="margin-top:6px"><span style="color:${esc(e.lineStyle.color)}">●</span> ${esc(e.name)}<br><span style="color:var(--muted)">${esc(new Date(e.xAxis).toLocaleString())}</span></div>`).join("");
+    // Include every quota observation in the hovered usage bucket, even off the line itself.
+    const eventsByBucket=new Map();
+    for(const event of overlay.events){
+      const bucket=range.start+Math.floor((event.xAxis/1000-range.start)/range.step)*range.step;
+      if(!eventsByBucket.has(bucket))eventsByBucket.set(bucket,[]);
+      eventsByBucket.get(bucket).push(event);
+    }
+    const markerEvents=[...new Set(overlay.events.map(e=>e.xAxis))].map(time=>{
+      const events=overlay.events.filter(e=>e.xAxis===time);
+      return {...events[0],label:{formatter:events.map(e=>e.label.formatter).join("\n")},tooltip:{trigger:"item",formatter:()=>eventTooltip(events)}};
+    });
     trendChart=trendChart||AIUsage.init($("trend-chart"));
     trendChart.setOption({
       grid:{left:8,right:8,top:36,bottom:8,containLabel:true},
-      tooltip:{trigger:"axis",formatter:AIUsage.tooltipFormatter(fmtFull)},
+      tooltip:{trigger:"axis",formatter:params=>usageTooltip(params)+eventTooltip(eventsByBucket.get(Number(params[0]?.axisValue)/1000)||[])},
       // Sub-daily buckets: hours as HH:MM, local midnight as a bold full date (the default shows a bare day number).
       xAxis:{type:"time",min:(first-range.step/2)*1000,max:overlay.end*1000,axisLabel:{hideOverlap:true,...(range.step<86400?{rich:{day:{fontWeight:"bold"}},formatter:v=>{const d=new Date(v);return d.getHours()||d.getMinutes()?`${two(d.getHours())}:${two(d.getMinutes())}`:`{day|${two(d.getDate())}.${two(d.getMonth()+1)}}`;}}:{})}},
       yAxis:{type:"value",axisLabel:{formatter:fmtShort}},
@@ -349,7 +366,7 @@
         id:s.name,barMaxWidth:28,...(s.color?{itemStyle:{color:s.color}}:{}),
         markPoint:i===visible.length-1&&peak[1]>0?{...AIUsage.peak(()=>`peak ${timeLabel(peak[0],range)}  ${fmtShort(peak[1])}`),data:[{coord:[peak[0]*1000,peak[1]]}]}:undefined,
       })), {id:"quota-overlay",type:"line",data:[],showSymbol:false,silent:false,
-        markLine:{symbol:["none","none"],lineStyle:{type:"dashed",width:1.5},label:{show:false},tooltip:{formatter:p=>esc(p.name)},data:overlay.events},
+        markLine:{symbol:["none","none"],lineStyle:{type:"dashed",width:1.5},label:{show:true,position:"insideEndTop",fontSize:10,color:css("--muted"),backgroundColor:css("--bg"),padding:3},data:markerEvents},
         markArea:{silent:false,label:{show:true,position:"insideTopRight",distance:8,color:css("--muted"),fontSize:10,overflow:"truncate",width:210},tooltip:{formatter:p=>esc(p.name)},data:overlay.areas}
       }],
     },{replaceMerge:["series"]});
