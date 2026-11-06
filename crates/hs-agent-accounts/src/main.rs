@@ -72,7 +72,18 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 15,
                 runtime::verify_version(&ctx, provider.id(), &binary, &runtime.version),
             )
-            .await?;
+            .await
+            .map_err(|error| {
+                Failure::new(
+                    &error.code,
+                    &format!(
+                        "Startup verification for {} at {} failed: {}",
+                        provider.id(),
+                        binary.display(),
+                        error.message
+                    ),
+                )
+            })?;
         }
     }
     let page = include_str!("index.html").replace("__AGENT_ACCOUNTS_VERSION__", VERSION);

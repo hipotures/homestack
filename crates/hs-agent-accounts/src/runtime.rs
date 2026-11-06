@@ -218,7 +218,17 @@ async fn candidate(ctx: &Context, provider: &str, selected: &str, stage: &Path) 
 
 pub async fn verify_version(ctx: &Context, provider: &str, path: &Path, selected: &str) -> Result<()> {
     let home = ctx.root.join("state/runtime-check");
-    for sub in ["", "home", "work", "tmp"] {
+    for sub in [
+        "",
+        "home",
+        "home/.config",
+        "home/.cache",
+        "home/.local/share",
+        "work",
+        "tmp",
+        "codex",
+        "claude",
+    ] {
         process::directory(&home.join(sub))?;
     }
     let mut command = process::command(path, &home, provider);
@@ -246,7 +256,14 @@ pub async fn verify_version(ctx: &Context, provider: &str, path: &Path, selected
             .split_whitespace()
             .any(|v| v == selected)
     {
-        return Err(failure("Runtime did not report the expected version"));
+        let reported = String::from_utf8_lossy(&output)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        return Err(failure(&format!(
+            "{provider} runtime expected version {selected}, but --version returned {status}; output: {}",
+            if reported.is_empty() { "<empty>" } else { &reported }
+        )));
     }
     Ok(())
 }

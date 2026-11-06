@@ -241,6 +241,10 @@ REST operations:
 Claude invocations set both `DISABLE_AUTOUPDATER=1` and `DISABLE_UPDATES=1`.
 Codex invocations set `check_for_update_on_startup=false`. Neither adapter
 invokes a vendor updater or resolves binaries from a profile's PATH.
+Antigravity invocations set `AGY_CLI_DISABLE_AUTO_UPDATE=true`; the Claude update
+variables do not disable Antigravity's updater. This preserves the installed
+binary at its recorded version between managed upgrades and process restarts.
+The value must be the literal `true`; `1` still starts its background updater.
 The SDK itself stays pinned to the service image and changes with a service
 release; an incompatible CLI candidate cannot pass its usage verification.
 

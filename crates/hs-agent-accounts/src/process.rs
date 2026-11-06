@@ -71,6 +71,9 @@ pub fn command(binary: &Path, profile: &Path, provider: &str) -> tokio::process:
             .arg("-c")
             .arg("cli_auth_credentials_store=\"file\"");
     }
+    if provider == "antigravity" {
+        c.env("AGY_CLI_DISABLE_AUTO_UPDATE", "true");
+    }
     c
 }
 pub fn prepare(root: &Path, id: &str) -> Result<PathBuf> {
