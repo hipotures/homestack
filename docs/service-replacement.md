@@ -86,6 +86,20 @@ task ends. An interrupted update therefore resumes by reopening Update image.
 At no point does a volume belong to no container, and a container is destroyed
 only when it holds nothing but its own root.
 
+If the new image fails its health check, `homestack update` and the TUI's
+**Update image** action offer a rollback to the exact previous image and
+digest. They wait for a separate explicit confirmation, defaulting to No;
+`-y` and `--auto` never approve a rollback. Without an interactive terminal,
+the CLI leaves the update paused. Rollback replaces the image while preserving
+the current persistent home; it does not revert application data.
+
+The previous image identity stays in Proxmox's replacement metadata until
+health verification succeeds. When it was not recorded, the client cannot
+offer an exact previous image. An image awaiting health verification can also
+be replaced with a corrective release once all volumes have returned to the
+target and no holder or root-image staging remains. Incomplete volume
+transfers must still resume with their original release.
+
 Measured on pve3 (LVM-thin, 2026-10-22): creating the holder takes about 1 s and
 removing it 0.3 s, both outside the downtime. Moving a 1 GiB home takes about
 0.5 s. Shutdown, move out, destroy, create from a 60 MB service image, move back

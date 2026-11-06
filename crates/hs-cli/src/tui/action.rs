@@ -105,8 +105,8 @@ pub enum Decision {
     /// Apply the plan, with its secrets (the LUKS passphrase).
     Apply(Option<Value>),
     Cancel,
-    /// `addkey`: restart the VM now or not.
-    Restart(bool),
+    /// Explicit answer to a follow-up question, such as restart or rollback.
+    Confirm(bool),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,7 +136,7 @@ pub enum Progress {
         secret: Option<String>,
     },
     Steps(Vec<Step>),
-    /// `addkey`: the key is prepared; restart now?
+    /// A follow-up yes/no question, initially answered No.
     Question {
         lines: Vec<String>,
     },
@@ -504,7 +504,7 @@ async fn restart_if_asked(
             format!("Restart {name} now?"),
         ],
     });
-    if decisions.recv().await != Some(Decision::Restart(true)) {
+    if decisions.recv().await != Some(Decision::Confirm(true)) {
         return Ok(());
     }
     let again = client

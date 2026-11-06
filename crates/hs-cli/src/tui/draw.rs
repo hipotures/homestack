@@ -3015,8 +3015,8 @@ fn action_box(buf: &mut Buffer, area: Rect, app: &App, action: &Action) {
         }
         Stage::Running { .. } => vec![Control::key("hide esc")],
         Stage::Question { yes, .. } => vec![
-            raised(Control::key("&restart now"), *yes),
-            raised(Control::key("later esc"), !*yes),
+            raised(Control::key("&yes"), *yes),
+            raised(Control::key("no esc"), !*yes),
         ],
         Stage::Done { ok, .. } => vec![
             Control::plain(if *ok { "✓ done" } else { "✗ failed" }),

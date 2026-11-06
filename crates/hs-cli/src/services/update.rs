@@ -49,6 +49,35 @@ pub struct Plan {
     pub problems: Vec<String>,
 }
 
+/// An exact prior image that can be reviewed after a failed health check.
+#[derive(Debug, Clone)]
+pub struct Rollback {
+    pub ctid: u32,
+    pub image: String,
+    pub digest: String,
+}
+
+#[derive(Debug)]
+pub struct ApplyError {
+    pub message: String,
+    pub rollback: Option<Rollback>,
+}
+
+impl From<String> for ApplyError {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            rollback: None,
+        }
+    }
+}
+
+impl From<&str> for ApplyError {
+    fn from(message: &str) -> Self {
+        message.to_owned().into()
+    }
+}
+
 fn text<'a>(cfg: &'a Value, key: &str) -> &'a str {
     cfg[key].as_str().unwrap_or_default()
 }
@@ -336,6 +365,17 @@ pub async fn plan(
         };
         let current = target.image.rsplit_once(':').map_or("unknown", |(_, v)| v);
         let state = if target.running { "running" } else { "stopped" };
+        if operation(&target.description).is_ok_and(|op| op.is_some())
+            && plan
+                .reviewed
+                .get(&target.ctid)
+                .is_some_and(|reviewed| reviewed.recovery_operation.is_none())
+        {
+            plan.lines.push(format!(
+                "CT {}: the previous image replacement restored its volumes but did not pass health verification; replacing that image with {version}.",
+                target.ctid
+            ));
+        }
         plan.lines.extend([
             format!("{} · {} · CT {}", target.hostname, target.node, target.ctid),
             String::new(),
@@ -533,9 +573,9 @@ pub async fn apply(
     source: &Source,
     plan: &Plan,
     say: &(dyn Fn(&str) + Send + Sync),
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, ApplyError> {
     if !plan.problems.is_empty() {
-        return Err("Resolve the review problems first".to_owned());
+        return Err("Resolve the review problems first".into());
     }
     if source.manifest.schema3.is_some() {
         for target in &plan.targets {
@@ -554,10 +594,12 @@ pub async fn apply(
         }
         let done = one(pve, source, plan, target, bootstrap.as_ref(), say)
             .await
-            .map_err(|error| {
-                format!(
-                    "{error}\nUpdate paused. Update the image again to finish it; it continues from what Proxmox shows."
-                )
+            .map_err(|mut error| {
+                error.message = format!(
+                    "{}\nUpdate paused. Update the image again to finish it; it continues from what Proxmox shows.",
+                    error.message
+                );
+                error
             })?;
         for line in &done {
             say(line);
@@ -565,6 +607,28 @@ pub async fn apply(
         lines.extend(done);
     }
     Ok(lines)
+}
+
+/// Read-only review; callers must obtain a separate explicit rollback decision.
+pub async fn rollback_plan(
+    pve: &impl Pve,
+    config: &DeployConfig,
+    source: &Source,
+    rollback: &Rollback,
+    selection_root: &std::path::Path,
+) -> Result<Plan, String> {
+    let version = rollback.image.rsplit_once(':').map_or("", |(_, version)| version);
+    if source.image(version) != rollback.image {
+        return Err("The previous image does not belong to this service".into());
+    }
+    let plan = plan(pve, config, source, &[rollback.ctid], version, "", selection_root).await;
+    if !plan.problems.is_empty() {
+        return Err(plan.problems.join("\n"));
+    }
+    if plan.digest != rollback.digest {
+        return Err("The previous image tag no longer resolves to its recorded digest; rollback refused".into());
+    }
+    Ok(plan)
 }
 
 /// The environment the saved application selections and HomeStack's own
@@ -629,6 +693,37 @@ fn same_mount(source: &Source, target: &Instance) -> Result<(), String> {
 const REPLACEMENT_OPERATION: &str = "replacement-operation ";
 const REPLACEMENT_RUNNING: &str = "replacement-running ";
 const REPLACEMENT_ONBOOT: &str = "replacement-onboot ";
+const REPLACEMENT_PREVIOUS_IMAGE: &str = "replacement-previous-image ";
+const REPLACEMENT_PREVIOUS_DIGEST: &str = "replacement-previous-digest ";
+
+fn previous_release(target: &Instance, resuming: bool) -> Result<Option<Rollback>, String> {
+    if !resuming {
+        return Ok(Some(Rollback {
+            ctid: target.ctid,
+            image: target.image.clone(),
+            digest: target.digest.clone(),
+        }));
+    }
+    let values = |prefix| {
+        target
+            .description
+            .lines()
+            .filter_map(move |line| line.strip_prefix(prefix))
+            .collect::<Vec<_>>()
+    };
+    match (
+        values(REPLACEMENT_PREVIOUS_IMAGE).as_slice(),
+        values(REPLACEMENT_PREVIOUS_DIGEST).as_slice(),
+    ) {
+        ([], []) => Ok(None),
+        ([image], [digest]) if !image.is_empty() && !digest.is_empty() => Ok(Some(Rollback {
+            ctid: target.ctid,
+            image: (*image).into(),
+            digest: (*digest).into(),
+        })),
+        _ => Err("Previous replacement image identity is missing or ambiguous".into()),
+    }
+}
 
 /// Intended power settings survive a stopped replacement and a process restart.
 fn original_power(target: &Instance) -> Result<(bool, bool), String> {
@@ -918,11 +1013,22 @@ async fn reviewed_state(pve: &impl Pve, target: &Instance, image: &str, digest: 
                     }
                 }
                 if parsed.image != image || parsed.digest != digest {
-                    return Err(CoreError::Refused(
-                        "Finish the pending replacement release before selecting another image".to_owned(),
-                    ));
+                    if root_image_operation
+                        || list
+                            .iter()
+                            .any(|item| item["vmid"].as_u64() == Some(u64::from(recreate::HOLDER_ID)))
+                    {
+                        return Err(CoreError::Refused(
+                            "Finish restoring the pending replacement's volumes before selecting another image"
+                                .to_owned(),
+                        ));
+                    }
+                    // With the target present and no staging/holder, the volume transfer
+                    // is complete. A failed health check must not block a corrective image.
+                    // Start a new operation while retaining the original power intent.
+                } else {
+                    recovery_operation = op;
                 }
-                recovery_operation = op;
             }
         }
         let root = text(&cfg, "rootfs").split(',').next().unwrap_or_default();
@@ -972,12 +1078,10 @@ async fn one(
     target: &Instance,
     bootstrap: Option<&ApiBootstrap>,
     say: &(dyn Fn(&str) + Send + Sync),
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, ApplyError> {
     let (ctid, node) = (target.ctid, target.node.as_str());
     if deploy::initializing(&target.description) {
-        return Err(format!(
-            "CT {ctid}: initialization is unfinished; image replacement is refused"
-        ));
+        return Err(format!("CT {ctid}: initialization is unfinished; image replacement is refused").into());
     }
     let reviewed = plan
         .reviewed
@@ -987,9 +1091,11 @@ async fn one(
         .await
         .map_err(safety_message)?;
     if current != *reviewed {
-        return Err(format!("CT {ctid} changed since review; review again"));
+        return Err(format!("CT {ctid} changed since review; review again").into());
     }
     same_mount(source, target)?;
+    let rollback = previous_release(target, reviewed.recovery_operation.is_some())?
+        .filter(|previous| previous.image != plan.image || previous.digest != plan.digest);
     // Every read/authorization check precedes the first environment or PVE write.
     if source.manifest.schema3.is_some() {
         let environment = application_environment(&plan.selection_root, source, target)?;
@@ -1004,11 +1110,18 @@ async fn one(
         .clone()
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let completed_description = deploy::description(source, &plan.image, &plan.digest);
-    let description = format!(
+    let rollback_metadata = rollback.as_ref().map_or(String::new(), |previous| {
+        format!(
+            "\n{REPLACEMENT_PREVIOUS_IMAGE}{}\n{REPLACEMENT_PREVIOUS_DIGEST}{}",
+            previous.image, previous.digest
+        )
+    });
+    let mut description = format!(
         "{completed_description}\n{REPLACEMENT_OPERATION}{operation}\n{REPLACEMENT_RUNNING}{}\n{REPLACEMENT_ONBOOT}{}",
         u8::from(was_running),
         u8::from(was_onboot)
     );
+    description.push_str(&rollback_metadata);
     // Pull the release once per digest; the file is removed after the update.
     let short = plan.digest.trim_start_matches("sha256:").get(..12).unwrap_or_default();
     let file = format!("hs-{ctid}-{short}");
@@ -1059,10 +1172,16 @@ async fn one(
     say(&format!("{node}: CT {ctid} · Replace"));
     let previous = instance::note(target);
     let note = format!(
-        "{}\n{REPLACEMENT_OPERATION}{operation}",
+        "{}\n{REPLACEMENT_OPERATION}{operation}{rollback_metadata}",
         previous
             .lines()
-            .filter(|line| !line.starts_with(REPLACEMENT_OPERATION))
+            .filter(|line| ![
+                REPLACEMENT_OPERATION,
+                REPLACEMENT_PREVIOUS_IMAGE,
+                REPLACEMENT_PREVIOUS_DIGEST
+            ]
+            .iter()
+            .any(|prefix| line.starts_with(prefix)))
             .collect::<Vec<_>>()
             .join("\n")
     );
@@ -1122,10 +1241,7 @@ async fn one(
     .filter_map(|(different, field)| different.then_some(field))
     .collect();
     if !differences.is_empty() {
-        return Err(format!(
-            "CT {ctid}: replacement verification failed: {}",
-            differences.join(", ")
-        ));
+        return Err(format!("CT {ctid}: replacement verification failed: {}", differences.join(", ")).into());
     }
     // Once persistent volumes and identity are verified, a health-check failure
     // must not silently disable the original autostart setting.
@@ -1140,16 +1256,27 @@ async fn one(
         say(&format!("{node}: CT {ctid} · Initialize API"));
         bootstrap
             .initialize(pve, &api_spec(target)?, false, &|line| say(line))
-            .await?;
+            .await
+            .map_err(|message| ApplyError {
+                message,
+                rollback: rollback.clone(),
+            })?;
         readiness = "HTTPS /health/live: response OK; uploaded configuration version verified".to_owned();
         if !start {
             node::power(pve, node, ctid, "stop").await?;
         }
     } else if start {
         if !new.running {
-            node::power(pve, node, ctid, "start").await?;
+            node::power(pve, node, ctid, "start")
+                .await
+                .map_err(|message| ApplyError {
+                    message,
+                    rollback: rollback.clone(),
+                })?;
         }
-        readiness = deploy::healthy(&source.manifest, &target.address).await?;
+        readiness = deploy::healthy(&source.manifest, &target.address)
+            .await
+            .map_err(|message| ApplyError { message, rollback })?;
     } else {
         readiness = "Health check skipped: container left stopped".to_owned();
     }

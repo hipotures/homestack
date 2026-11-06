@@ -153,7 +153,7 @@ pub async fn run(
     };
     let mut failed = Vec::new();
     for index in chosen {
-        if !apply(&pve, &pending[index], paint, say).await {
+        if !apply(&pve, &config, root, &pending[index], paint, say).await {
             failed.push(pending[index].source.manifest.id.clone());
         }
     }
@@ -194,7 +194,7 @@ async fn run_auto(
         }
         show(&pending, paint, say);
         for update in &pending {
-            if !update.plan.problems.is_empty() || !apply(pve, update, paint, say).await {
+            if !update.plan.problems.is_empty() || !apply(pve, config, root, update, paint, say).await {
                 failed.push((update.source.manifest.id.clone(), update.version.clone()));
             }
         }
@@ -506,7 +506,14 @@ fn show(pending: &[Pending], paint: Paint, say: &(dyn Fn(&str) + Send + Sync)) {
 }
 
 /// Apply one reviewed update; false when it failed.
-async fn apply(pve: &impl Pve, update: &Pending<'_>, paint: Paint, say: &(dyn Fn(&str) + Send + Sync)) -> bool {
+async fn apply(
+    pve: &impl Pve,
+    config: &DeployConfig,
+    root: &Path,
+    update: &Pending<'_>,
+    paint: Paint,
+    say: &(dyn Fn(&str) + Send + Sync),
+) -> bool {
     let id = &update.source.manifest.id;
     say(&format!(
         "\n{}",
@@ -518,8 +525,56 @@ async fn apply(pve: &impl Pve, update: &Pending<'_>, paint: Paint, say: &(dyn Fn
             true
         }
         Err(error) => {
-            say(&paint.red(&format!("{id}: {error}")));
+            say(&paint.red(&format!("{id}: {}", error.message)));
+            if let Some(rollback) = error.rollback {
+                match update::rollback_plan(pve, config, update.source, &rollback, root).await {
+                    Ok(plan) => {
+                        for line in &plan.lines {
+                            say(line);
+                        }
+                        say("Rollback replaces the image only; persistent application data is not reverted.");
+                        let question = format!("Roll back CT {} to {}?", rollback.ctid, rollback.image);
+                        match confirm_rollback(&question, say) {
+                            Ok(true) => match update::apply(pve, update.source, &plan, say).await {
+                                Ok(_) => say(&paint.green(&format!(
+                                    "{id}: previous image restored; the requested update was not applied."
+                                ))),
+                                Err(error) => say(&paint.red(&format!("{id}: rollback failed: {}", error.message))),
+                            },
+                            Ok(false) => say("Rollback declined. Update remains paused."),
+                            Err(error) => say(&format!("Rollback not performed: {error}")),
+                        }
+                    }
+                    Err(error) => say(&format!("Rollback unavailable: {error}")),
+                }
+            }
             false
+        }
+    }
+}
+
+// Update flags (-y and --auto) never approve restoring an earlier image.
+fn confirm_rollback(question: &str, say: &(dyn Fn(&str) + Send + Sync)) -> Result<bool, String> {
+    if !std::io::stdin().is_terminal() {
+        say("Rollback requires explicit confirmation in an interactive terminal.");
+        return Ok(false);
+    }
+    loop {
+        print!("\n{question} [y/N]: ");
+        std::io::stdout().flush().map_err(|error| error.to_string())?;
+        let mut answer = String::new();
+        if std::io::stdin()
+            .lock()
+            .read_line(&mut answer)
+            .map_err(|error| error.to_string())?
+            == 0
+        {
+            return Ok(false);
+        }
+        match answer.trim().to_ascii_lowercase().as_str() {
+            "y" | "yes" => return Ok(true),
+            "" | "n" | "no" => return Ok(false),
+            _ => say("Enter yes or no. Enter keeps the update paused."),
         }
     }
 }

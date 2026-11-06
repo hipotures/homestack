@@ -1498,7 +1498,7 @@ async fn apply(
             if let Some(plan) = update_plan {
                 match update::apply(&s.pve, source, &plan, &say).await {
                     Ok(done) => lines.extend(done),
-                    Err(error) => return fail(lines, error),
+                    Err(error) => return fail(lines, error.message),
                 }
             }
             if let Some(plan) = change {

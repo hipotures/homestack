@@ -591,7 +591,40 @@ async fn common_work(
             }
             progress(Progress::Steps(steps.clone()));
         };
-        let lines = update::apply(&pve, &source, &plan, &said).await?;
+        let lines = match update::apply(&pve, &source, &plan, &said).await {
+            Ok(lines) => lines,
+            Err(error) => {
+                let Some(rollback) = error.rollback else {
+                    return Err(error.message);
+                };
+                say(&error.message);
+                let rollback_plan = update::rollback_plan(
+                    &pve,
+                    &config,
+                    &source,
+                    &rollback,
+                    path.parent().ok_or("Deployment profile directory is missing")?,
+                )
+                .await?;
+                let lines = vec![
+                    format!("CT {} did not pass the new image's health check.", rollback.ctid),
+                    format!("Roll back from {} to {}?", plan.image, rollback.image),
+                    "The persistent home is preserved; application data is not reverted.".into(),
+                ];
+                progress(Progress::Question { lines });
+                match decisions.recv().await {
+                    Some(Decision::Confirm(true)) => {}
+                    _ => return Err(format!("{}\nRollback declined. Update remains paused.", error.message)),
+                }
+                update::apply(&pve, &source, &rollback_plan, &said)
+                    .await
+                    .map_err(|error| error.message)?;
+                return Err(format!(
+                    "{}\nPrevious image restored; the requested update was not applied.",
+                    error.message
+                ));
+            }
+        };
         Ok(Some(lines))
     }
     .await;

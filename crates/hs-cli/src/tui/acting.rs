@@ -867,14 +867,14 @@ impl App {
                     *yes = !*yes;
                     None
                 }
-                KeyCode::Enter => {
-                    let answer = *yes;
+                KeyCode::Enter | KeyCode::Char('y' | 'Y') => {
+                    let answer = *yes || matches!(code, KeyCode::Char('y' | 'Y'));
                     action.stage = Stage::Running { steps: Vec::new() };
-                    Some(Request::Decide(Decision::Restart(answer)))
+                    Some(Request::Decide(Decision::Confirm(answer)))
                 }
-                KeyCode::Esc => {
+                KeyCode::Esc | KeyCode::Char('n' | 'N') => {
                     action.stage = Stage::Running { steps: Vec::new() };
-                    Some(Request::Decide(Decision::Restart(false)))
+                    Some(Request::Decide(Decision::Confirm(false)))
                 }
                 _ => None,
             },
