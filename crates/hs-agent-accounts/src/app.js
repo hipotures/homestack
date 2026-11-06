@@ -4,6 +4,8 @@ let selectedOperation = null;
 let source = null;
 const providerCapabilities = new Map();
 const quotaGroups = new Map();
+const pendingActions = new Set();
+const successfulChecks = new Map();
 async function api(path, method = 'GET', body) {
   const response = await fetch('/api/v1' + path, {
     method, headers: { 'Content-Type': 'application/json' },
@@ -31,13 +33,29 @@ function time(value) {
 const percent = value => value == null ? 'unknown' : `${value.toFixed(1)}% used · ${Math.max(0, 100 - value).toFixed(1)}% left`;
 function setText(element, text) { if (element.textContent !== text) element.textContent = text; }
 const notice = error => { $('#notice').textContent = error.message || error; };
-function button(parent, label, action) {
+function actionState(element, busy) {
+  element.disabled = busy || element.dataset.unavailable === 'true';
+  element.classList.toggle('busy', busy);
+  element.setAttribute('aria-busy', String(busy));
+}
+function button(parent, label, action, key, unavailable = false) {
   const element = node('button', label);
   element.type = 'button';
+  element.dataset.action = key || '';
+  element.dataset.unavailable = String(unavailable);
+  actionState(element, pendingActions.has(key));
   element.onclick = async () => {
-    element.disabled = true;
+    if (key && pendingActions.has(key)) return;
+    if (key) pendingActions.add(key);
+    actionState(element, true);
     try { await action(); } catch (error) { notice(error); }
-    finally { element.disabled = false; }
+    finally {
+      if (key) pendingActions.delete(key);
+      actionState(element, false);
+      if (key) document.querySelectorAll('button[data-action]').forEach(button => {
+        if (button.dataset.action === key) actionState(button, false);
+      });
+    }
   };
   parent.append(element);
   return element;
@@ -133,11 +151,17 @@ async function refresh() {
       card.append(quotas);
     } else card.append(node('p', 'Usage unavailable', 'sub'));
     const foot = node('div', undefined, 'card-foot');
-    foot.append(node('span', 'Last successful check ' + time(profile.last_success), 'meta'));
+    const lastCheck = node('span', 'Last successful check ' + time(profile.last_success), 'meta');
+    const elapsed = Date.now() - (successfulChecks.get(profile.id) || 0);
+    if (elapsed < 2400) {
+      lastCheck.classList.add('check-success');
+      lastCheck.style.animationDelay = `-${elapsed}ms`;
+    } else successfulChecks.delete(profile.id);
+    foot.append(lastCheck);
     if (profile.stale && profile.enabled) foot.append(node('p', 'Stale — awaiting a successful check', 'warn'));
     if (profile.error && profile.enabled) foot.append(node('p', profile.error.message, 'error'));
     const actions = node('div', undefined, 'actions'), group = node('div', undefined, 'seg');
-    button(group, 'Check now', async () => showOperation(await api(`/profiles/${profile.id}/limits`, 'POST', {}))).disabled = !profile.enabled;
+    button(group, 'Check now', () => backgroundOperation(`/profiles/${profile.id}/limits`, {}, profile.id), `probe:${profile.id}`, !profile.enabled);
     button(group, 'Details', () => details(profile));
     if (providerCapabilities.get(profile.provider)?.includes('account_statistics')) button(group, 'Statistics', async () => showOperation(await api(`/profiles/${profile.id}/statistics`, 'POST', {}))).disabled = !profile.enabled;
     group.firstChild.classList.add('primary');
@@ -161,8 +185,8 @@ async function refresh() {
     if (runtime.previous_version) row.append(node('span', `Previous working version retained: ${runtime.previous_version}`, 'meta'));
     if (runtime.last_result) row.append(node('p', runtime.last_result, runtime.last_error ? 'error' : 'meta'));
     const actions = node('div', undefined, 'actions'), group = node('div', undefined, 'seg');
-    button(group, 'Check available version', async () => showOperation(await api(`/runtimes/${runtime.provider}/check`, 'POST', {})));
-    button(group, 'Upgrade', async () => showOperation(await api(`/runtimes/${runtime.provider}/upgrade`, 'POST', { version: runtime.latest_version }))).disabled = !runtime.latest_version || compareVersions(runtime.latest_version, runtime.version) <= 0;
+    button(group, 'Check available version', () => backgroundOperation(`/runtimes/${runtime.provider}/check`, {}), `version:${runtime.provider}`);
+    button(group, 'Upgrade', () => backgroundOperation(`/runtimes/${runtime.provider}/upgrade`, { version: runtime.latest_version }), `upgrade:${runtime.provider}`, !runtime.latest_version || compareVersions(runtime.latest_version, runtime.version) <= 0);
     actions.append(group); row.append(actions); $('#runtimes').append(row);
   }
   setText($('#versions'), [appVersion, ...runtimes.map(r => `${runtimeName(r.provider)} ${r.version}`)].join(' · '));
@@ -173,6 +197,24 @@ function compareVersions(a, b) {
   const left = a.split('.').map(Number), right = b.split('.').map(Number);
   for (let i = 0; i < 3; i++) if (left[i] !== right[i]) return left[i] - right[i];
   return 0;
+}
+async function backgroundOperation(path, body, profileId) {
+  const operation = await api(path, 'POST', body);
+  const result = operation.finished_at ? operation : await new Promise((resolve, reject) => {
+    const events = new EventSource(`/api/v1/operations/${operation.id}/events`);
+    events.addEventListener('operation', event => {
+      const value = JSON.parse(event.data);
+      if (value.finished_at) { events.close(); resolve(value); }
+    });
+    events.onerror = () => {
+      if (events.readyState === EventSource.CLOSED) {
+        events.close(); reject(Error('Progress connection lost. Refresh to check the operation status.'));
+      }
+    };
+  });
+  if (result.status === 'succeeded' && profileId) successfulChecks.set(profileId, Date.now());
+  await refresh();
+  if (result.status === 'failed') throw Error(result.error?.message || result.message);
 }
 function showOperation(operation) {
   selectedOperation = operation;
@@ -195,7 +237,14 @@ function updateOperation(operation) {
   $('#copy-code').hidden = !operation.user_code;
   $('#code-form').hidden = !operation.accepts_code;
   $('#cancel-operation').hidden = !!operation.finished_at;
-  if (operation.finished_at) { source?.close(); refresh().catch(notice); }
+  if (operation.finished_at) {
+    source?.close();
+    if (operation.kind === 'authentication') {
+      $('#operation').close();
+      if (operation.status === 'failed') notice(operation.error?.message || operation.message);
+    }
+    refresh().catch(notice);
+  }
 }
 $('#copy-code').onclick = async () => {
   const code = $('#device-code');
