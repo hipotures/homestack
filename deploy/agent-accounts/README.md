@@ -469,7 +469,7 @@ A missing file or `enabled = false` disables notifications. When enabled,
 environment variables. The bot must already have permission to send to the
 specified chat. These settings are not inherited by provider CLI processes.
 
-Only weekly quota windows (10080 minutes) of enabled profiles trigger messages,
+Only weekly quota windows (10080 minutes) of enabled profiles trigger quota-reset messages,
 for all supported providers. A first observation establishes the baseline;
 a 5-hour reset alone sends nothing. A scheduled reset is confirmed by a fresh
 observation after the previous deadline with a new future reset deadline.
@@ -501,3 +501,27 @@ replace any older pending values, then take effect during the normal stop/start.
 Other pending configuration changes still require review; the error identifies
 the field without printing its value. A separate restart is not required for
 matching application settings.
+
+### Startup verification and header indicator
+
+On each service-process start, enabled Telegram notifications send one message:
+"Agent Accounts started. Weekly quota reset notifications are enabled."
+Only Telegram's successful `sendMessage` acknowledgement marks the configuration
+verified. Failed startup messages retry with backoff (five minutes for rejected
+credentials/chat access, and honoring `retry_after` for rate limits); the service
+and its health endpoints remain available. Queued quota-reset notifications wait
+until the startup message succeeds. Missing or malformed optional Telegram
+configuration disables notifications and logs a sanitized error without stopping
+the service; correct its environment and restart to retry that configuration.
+A lost acknowledgement can duplicate a startup message on retry, as with
+ordinary notifications.
+
+The header replaces the subscription subtitle with a green check and Telegram
+logo only after verification. It starts hidden, disappears after a delivery
+failure or loss of the browser's service connection, and returns after a
+successful delivery. `GET /api/v1/notifications/telegram` returns only
+`{"verified":true}` or `{"verified":false}`; credentials and chat identifiers
+are never returned.
+This indicator reflects the last completed delivery attempt, not a continuous
+connectivity probe. The SVG is Telegram's official logo from
+https://telegram.org/tour/screenshots, served locally without external requests.

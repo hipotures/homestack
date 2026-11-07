@@ -8,7 +8,10 @@ h3 { margin: 0; font-size: var(--fs-body); font-weight: 600; }
 p { margin: 0; }
 .sub { font-size: var(--fs-small); color: var(--muted); }
 .top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; }
-.brand { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
+.brand { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
+.telegram-status { display: inline-flex; align-items: center; gap: 6px; }
+.telegram-check { color: var(--down); font-size: 22px; font-weight: 600; line-height: 1; }
+.telegram-status img { display: block; flex: none; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: var(--gap-grid); }
 .card-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; }
 .provider-codex { --agent: var(--codex); }

@@ -100,7 +100,10 @@ impl Context {
             heartbeat_seconds,
             heartbeat: Mutex::new((Instant::now(), 0)),
             shutdown: CancellationToken::new(),
-            telegram: crate::telegram::Telegram::from_env()?,
+            telegram: crate::telegram::Telegram::from_env().unwrap_or_else(|error| {
+                eprintln!("Telegram notifications disabled: {}", error.message);
+                None
+            }),
         });
         for provider in &ctx.providers {
             ctx.seed(provider.id())?;

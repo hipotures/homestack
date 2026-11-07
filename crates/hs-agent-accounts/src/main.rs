@@ -136,6 +136,10 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             "/style.css",
             get(|| async { ([(header::CONTENT_TYPE, "text/css")], include_str!("style.css")) }),
         )
+        .route("/telegram.svg", get(|| async {
+            ([(header::CONTENT_TYPE, "image/svg+xml")], include_str!("../assets/telegram.svg"))
+        }))
+        .route("/api/v1/notifications/telegram", get(telegram_status))
         .route("/api/v1/providers", get(providers))
         .route("/api/v1/profiles", get(profiles).post(create))
         .route("/api/v1/profiles/{id}", get(profile).patch(edit).delete(delete_profile))
@@ -460,6 +464,9 @@ async fn events(
         }
     });
     Ok(Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default()))
+}
+async fn telegram_status(State(c): State<Arc<Context>>) -> Json<Value> {
+    Json(json!({"verified": c.telegram.as_ref().is_some_and(telegram::Telegram::verified)}))
 }
 async fn api_health(State(c): State<Arc<Context>>) -> Result<Json<Value>> {
     Ok(Json(

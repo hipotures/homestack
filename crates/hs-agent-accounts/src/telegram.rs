@@ -2,7 +2,13 @@
 use crate::{app::Context, model::*};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Notification {
@@ -16,6 +22,7 @@ pub struct Telegram {
     client: reqwest::Client,
     url: String,
     chat: String,
+    verified: AtomicBool,
 }
 impl Telegram {
     pub fn from_env() -> Result<Option<Self>> {
@@ -54,10 +61,21 @@ impl Telegram {
             client,
             url: format!("https://api.telegram.org/bot{token}/sendMessage"),
             chat,
+            verified: AtomicBool::new(false),
         }))
     }
 
+    pub fn verified(&self) -> bool {
+        self.verified.load(Ordering::Relaxed)
+    }
+
     async fn send(&self, text: &str) -> std::result::Result<(), DeliveryError> {
+        let result = self.send_message(text).await;
+        self.verified.store(result.is_ok(), Ordering::Relaxed);
+        result
+    }
+
+    async fn send_message(&self, text: &str) -> std::result::Result<(), DeliveryError> {
         let mut response = self
             .client
             .post(&self.url)
@@ -93,6 +111,11 @@ impl Telegram {
 enum DeliveryError {
     Retry(u64),
     Rejected,
+}
+
+fn retry_delay(attempts: u32, requested: u64) -> u64 {
+    let backoff = 10_u64.saturating_mul(1_u64 << attempts.min(5)).min(300);
+    requested.max(backoff).min(i64::MAX as u64)
 }
 
 fn timestamp(value: Option<i64>) -> String {
@@ -226,8 +249,7 @@ async fn cycle(ctx: &Context, telegram: &Telegram) -> Result<()> {
             Err(DeliveryError::Retry(after)) => {
                 let pending = &mut current.notifications[index];
                 pending.attempts = pending.attempts.saturating_add(1);
-                let backoff = 10_u64.saturating_mul(1_u64 << pending.attempts.min(5)).min(300);
-                pending.next_attempt = now().saturating_add(after.max(backoff).min(i64::MAX as u64) as i64);
+                pending.next_attempt = now().saturating_add(retry_delay(pending.attempts, after) as i64);
                 eprintln!(
                     "Telegram notification delivery failed for profile {}; will retry",
                     profile.id
@@ -243,12 +265,38 @@ pub async fn run(ctx: Arc<Context>) {
     let Some(telegram) = &ctx.telegram else {
         return;
     };
+    let mut announced = false;
+    let mut attempts: u32 = 0;
+    let mut next_attempt = now();
     let mut timer = tokio::time::interval(Duration::from_secs(10));
     timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             _ = ctx.shutdown.cancelled() => break,
             _ = timer.tick() => {
+                if !announced {
+                    if now() < next_attempt { continue; }
+                    let result = tokio::select! {
+                        _ = ctx.shutdown.cancelled() => break,
+                        result = telegram.send("Agent Accounts started. Weekly quota reset notifications are enabled.") => result,
+                    };
+                    match result {
+                        Ok(()) => {
+                            announced = true;
+                            eprintln!("Telegram startup notification accepted; configuration verified");
+                        }
+                        Err(error) => {
+                            attempts = attempts.saturating_add(1);
+                            let delay = match error {
+                                DeliveryError::Rejected => 300,
+                                DeliveryError::Retry(after) => retry_delay(attempts, after),
+                            };
+                            next_attempt = now().saturating_add(delay as i64);
+                            eprintln!("Telegram startup verification failed; retrying in {delay} seconds");
+                            continue;
+                        }
+                    }
+                }
                 if let Err(error) = cycle(&ctx, telegram).await {
                     eprintln!("Telegram notification cycle failed: {}", error.code);
                 }

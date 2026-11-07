@@ -298,6 +298,8 @@ async function poll() {
   try {
     const { version } = await api('/version');
     if (version !== pageVersion) { location.reload(); return; }
+    const telegram = await api('/notifications/telegram');
+    $('#telegram-status').hidden = telegram.verified !== true;
     if (!providersLoaded) {
       for (const provider of await api('/providers')) {
         providerCapabilities.set(provider.id, provider.capabilities);
@@ -310,6 +312,7 @@ async function poll() {
     retryDelay = 2000;
     pollTimer = setTimeout(poll, 15000);
   } catch {
+    $('#telegram-status').hidden = true;
     disconnected = true;
     $('#notice').textContent = 'Connection to the service lost. Reconnecting…';
     pollTimer = setTimeout(poll, retryDelay);
