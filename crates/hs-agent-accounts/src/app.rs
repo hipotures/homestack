@@ -31,6 +31,7 @@ pub struct Context {
     pub heartbeat_seconds: u64,
     pub heartbeat: Mutex<(Instant, u64)>,
     pub shutdown: CancellationToken,
+    pub telegram: Option<crate::telegram::Telegram>,
 }
 impl Context {
     pub fn open(root: PathBuf, interval: u64, concurrency: usize, heartbeat_seconds: u64) -> Result<Arc<Self>> {
@@ -99,6 +100,7 @@ impl Context {
             heartbeat_seconds,
             heartbeat: Mutex::new((Instant::now(), 0)),
             shutdown: CancellationToken::new(),
+            telegram: crate::telegram::Telegram::from_env()?,
         });
         for provider in &ctx.providers {
             ctx.seed(provider.id())?;
@@ -210,6 +212,7 @@ impl Context {
             total_failures: 0,
             probe_duration_seconds: None,
             snapshot: None,
+            notifications: Vec::new(),
             created_at: now(),
             updated_at: now(),
             stale: true,
@@ -372,6 +375,7 @@ impl Context {
                     p.probe_duration_seconds = Some(started.elapsed().as_secs_f64());
                     match result {
                         Ok(snapshot) => {
+                            crate::telegram::observe(&mut p, &snapshot, ctx.telegram.is_some());
                             p.auth_status = "authenticated".into();
                             p.account = Some(snapshot.account.clone());
                             p.last_success = Some(snapshot.observed_at);

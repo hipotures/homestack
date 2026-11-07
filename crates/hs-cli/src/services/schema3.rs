@@ -12,6 +12,10 @@ use super::manifest::{Checked, MAX_BYTES};
 /// for or saved with the application's selections.
 pub const PROMETHEUS: &str = "HOMESTACK_PROMETHEUS_URL";
 
+pub const TELEGRAM_ENABLED: &str = "AGENT_ACCOUNTS_TELEGRAM_ENABLED";
+pub const TELEGRAM_TOKEN: &str = "AGENT_ACCOUNTS_TELEGRAM_BOT_TOKEN";
+pub const TELEGRAM_CHAT: &str = "AGENT_ACCOUNTS_TELEGRAM_CHAT_ID";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Contract {
     pub inputs: Vec<Input>,
@@ -301,7 +305,12 @@ pub fn parse(service: &str, defaults: &str, inputs: &str, directory: &str) -> Re
 impl Input {
     /// Whether HomeStack supplies the value instead of the operator.
     pub fn from_homestack(&self) -> bool {
-        matches!(&self.target, Target::Environment { variable } if variable == PROMETHEUS)
+        matches!(&self.target, Target::Environment { variable } if matches!(variable.as_str(), PROMETHEUS | TELEGRAM_ENABLED | TELEGRAM_TOKEN | TELEGRAM_CHAT))
+    }
+
+    // The owner explicitly permits this bot token in the ordinary PVE environment.
+    fn telegram_token(&self) -> bool {
+        matches!(&self.target, Target::Environment { variable } if variable == TELEGRAM_TOKEN)
     }
 
     pub fn title(&self) -> String {
@@ -310,7 +319,7 @@ impl Input {
 
     /// Parse text once, retaining JSON numbers and booleans in private storage.
     pub fn value(&self, text: &str) -> Result<Option<Value>, String> {
-        if self.kind == Kind::Secret {
+        if self.kind == Kind::Secret && !self.telegram_token() {
             return Err(format!(
                 "{}: protected secret delivery is not available; plain PVE environment is refused",
                 self.id
@@ -581,7 +590,32 @@ impl Contract {
         values: &mut BTreeMap<String, Value>,
         homestack: &hs_deploy::config::DeployConfig,
     ) -> Result<(), String> {
+        let telegram = if self.inputs.iter().any(|input| {
+            matches!(&input.target, Target::Environment { variable } if matches!(variable.as_str(), TELEGRAM_ENABLED | TELEGRAM_TOKEN | TELEGRAM_CHAT))
+        }) {
+            Some(super::telegram::load()?)
+        } else {
+            None
+        };
         for input in self.inputs.iter().filter(|input| input.from_homestack()) {
+            if let Target::Environment { variable } = &input.target
+                && matches!(variable.as_str(), TELEGRAM_ENABLED | TELEGRAM_TOKEN | TELEGRAM_CHAT)
+                && let Some(telegram) = &telegram
+            {
+                let value = match variable.as_str() {
+                    TELEGRAM_ENABLED => Some(Value::Bool(telegram.enabled)),
+                    TELEGRAM_TOKEN if telegram.enabled => Some(Value::String(telegram.bot_token.clone())),
+                    TELEGRAM_CHAT if telegram.enabled => Some(Value::String(telegram.chat_id.clone())),
+                    TELEGRAM_TOKEN | TELEGRAM_CHAT => None,
+                    _ => continue,
+                };
+                values.remove(&input.id);
+                if let Some(value) = value {
+                    input.validate_value(&value)?;
+                    values.insert(input.id.clone(), value);
+                }
+                continue;
+            }
             let url = homestack
                 .server
                 .prometheus_url
@@ -615,7 +649,7 @@ impl Contract {
         let mut environment = Vec::new();
         let mut document = self.configuration.as_ref().map(|c| c.document.clone());
         for input in &self.inputs {
-            if input.kind == Kind::Secret {
+            if input.kind == Kind::Secret && !input.telegram_token() {
                 return Err(format!("{}: protected secret delivery is unavailable", input.id));
             }
             let value = values.get(&input.id).or(input.default.as_ref());

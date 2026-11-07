@@ -64,6 +64,8 @@ pub struct Profile {
     #[serde(default)]
     pub probe_duration_seconds: Option<f64>,
     pub snapshot: Option<Snapshot>,
+    #[serde(default)]
+    pub notifications: Vec<crate::telegram::Notification>,
     pub created_at: i64,
     pub updated_at: i64,
     #[serde(default)]

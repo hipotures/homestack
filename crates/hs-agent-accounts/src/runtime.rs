@@ -434,7 +434,7 @@ impl Context {
                     "Upgrade verified with a real account-limits probe"
                 }.into());
                 // One database transaction publishes both the new pin and its real observation.
-                ctx.db.activate_runtime(&runtime, &p, &snapshot)?;
+                ctx.db.activate_runtime(&runtime, &p, &snapshot, ctx.telegram.is_some())?;
                 // Retain both installations so the operator can reverse this change.
                 if let Ok(entries) = std::fs::read_dir(&parent) {
                     for entry in entries.flatten() {

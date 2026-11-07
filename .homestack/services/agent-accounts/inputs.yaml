@@ -31,3 +31,25 @@ inputs:
     target:
       type: environment
       variable: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+  - id: telegram_enabled
+    label: Telegram notifications
+    description: Read from the local HomeStack telegram.toml configuration.
+    type: boolean
+    default: false
+    target:
+      type: environment
+      variable: AGENT_ACCOUNTS_TELEGRAM_ENABLED
+  - id: telegram_bot_token
+    label: Telegram bot token
+    description: Read from the local HomeStack telegram.toml configuration.
+    type: secret
+    target:
+      type: environment
+      variable: AGENT_ACCOUNTS_TELEGRAM_BOT_TOKEN
+  - id: telegram_chat_id
+    label: Telegram chat ID
+    description: Read from the local HomeStack telegram.toml configuration.
+    type: string
+    target:
+      type: environment
+      variable: AGENT_ACCOUNTS_TELEGRAM_CHAT_ID

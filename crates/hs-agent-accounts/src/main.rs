@@ -4,6 +4,7 @@ mod model;
 mod process;
 mod providers;
 mod runtime;
+mod telegram;
 mod telemetry;
 
 use app::Context;
@@ -169,6 +170,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         tokio::spawn(telemetry::run(ctx.clone(), endpoint));
     }
     tokio::spawn(ctx.clone().scheduler());
+    tokio::spawn(telegram::run(ctx.clone()));
     tokio::spawn(ctx.clone().heartbeat(addr));
     eprintln!("Agent Accounts listening on {addr}");
     let stop = ctx.clone();

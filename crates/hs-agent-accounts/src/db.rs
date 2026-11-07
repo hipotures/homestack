@@ -174,8 +174,15 @@ impl Database {
         Ok(())
     }
 
-    pub fn activate_runtime(&self, runtime: &Runtime, profile: &Profile, snapshot: &Snapshot) -> Result<()> {
+    pub fn activate_runtime(
+        &self,
+        runtime: &Runtime,
+        profile: &Profile,
+        snapshot: &Snapshot,
+        telegram_enabled: bool,
+    ) -> Result<()> {
         let mut p = profile.clone();
+        crate::telegram::observe(&mut p, snapshot, telegram_enabled);
         p.snapshot = Some(snapshot.clone());
         p.account = Some(snapshot.account.clone());
         p.last_success = Some(snapshot.observed_at);

@@ -439,3 +439,56 @@ AI Usage quota overlays consume `agent_account_limit_window_minutes` and
 All four carry the same provider/profile/window labels plus `window_label` and
 `model`. Exhaustion is the provider flag when supplied, otherwise utilization at
 least 100%; false is exported explicitly to clear previous observations.
+
+## Telegram weekly reset notifications
+
+Create `$XDG_CONFIG_HOME/homestack/telegram.toml` (normally
+`~/.config/homestack/telegram.toml`) on the desktop running HomeStack:
+
+```toml
+[telegram.notifications]
+enabled = true
+bot_token = "YOUR_BOT_TOKEN"
+chat_id = "-100YOUR_CHAT_ID"
+```
+
+Keep the file local, preferably with mode `0600`. HomeStack reads it during
+service deployment, configuration review and image updates. It supplies
+`AGENT_ACCOUNTS_TELEGRAM_ENABLED`, `AGENT_ACCOUNTS_TELEGRAM_BOT_TOKEN` and
+`AGENT_ACCOUNTS_TELEGRAM_CHAT_ID` through the existing application environment
+mechanism over the Proxmox API. No SSH or Pangolin configuration is involved.
+The owner explicitly permits the Telegram bot token in the container environment,
+where Proxmox administrators can read it. Values are not shown in deployment
+reviews or copied into saved application selections. No Telegram inputs appear
+in the deployment form. Updating the desktop file takes effect after applying
+service configuration or replacing the image; editing it does not change an
+already running container automatically.
+
+A missing file or `enabled = false` disables notifications. When enabled,
+`bot_token` and `chat_id` are required. For direct runs, supply the same three
+environment variables. The bot must already have permission to send to the
+specified chat. These settings are not inherited by provider CLI processes.
+
+Only weekly quota windows (10080 minutes) of enabled profiles trigger messages,
+for all supported providers. A first observation establishes the baseline;
+a 5-hour reset alone sends nothing. A scheduled reset is confirmed by a fresh
+observation after the previous deadline with a new future reset deadline.
+An early reset is inferred when used quota drops by at least five percentage
+points to at most 5% used, including a first post-reset reading of 98% available.
+This inference cannot distinguish a vendor correction from a reset, or detect
+a reset hidden by substantial usage between observations. No message is sent
+merely because the local clock passes a deadline. Changed account identities
+establish a new baseline instead of being reported as resets.
+
+One English message groups weekly windows reset in the same observation and
+reports the provider, profile name, available percentages, observation time and
+next reset deadlines in UTC. The snapshot and pending message are committed
+together in the existing profile record, including successful runtime
+upgrade/rollback probes. Pending messages survive process and image replacement.
+A separate worker delivers them without blocking usage checks. Failed network
+requests and server errors retry with backoff; Telegram rate limits honor
+`retry_after`. Rejected requests are logged without credentials and removed
+from the queue. A successful send removes its pending message. A lost response
+or interruption between Telegram acceptance and local acknowledgement can cause
+a duplicate on retry; Telegram sendMessage has no idempotency key. Telegram
+outages do not change service readiness.

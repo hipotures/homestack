@@ -389,6 +389,12 @@ IDs or targets, inverted/inapplicable constraints and unresolved required
 values are errors. Secret/password delivery is deliberately refused until
 a protected runtime secret mechanism exists; it never falls back to plain
 PVE environment. Do not disguise credentials as ordinary string inputs.
+The owner-authorized exception is Agent Accounts' Telegram bot token:
+`AGENT_ACCOUNTS_TELEGRAM_BOT_TOKEN` may use a `secret` input delivered through
+ordinary environment configuration. It is supplied from local
+`homestack/telegram.toml`, together with Telegram enabled/chat settings, and is
+not prompted for or saved in application selections. This exception does not
+enable generic secret delivery.
 
 A `key` input is a random access key the operator never types: it must be
 `required`, has no text constraints and targets an environment variable,

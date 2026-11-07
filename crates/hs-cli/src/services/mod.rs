@@ -14,6 +14,7 @@ pub mod migrate;
 pub mod public_dns;
 mod removal;
 mod root_image;
+mod telegram;
 pub mod update;
 
 pub mod schema3;
