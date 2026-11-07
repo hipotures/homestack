@@ -100,8 +100,62 @@ pub(super) fn permit(perms: &Value, path: &str, privilege: &str) -> bool {
     false
 }
 
+/// Only application variables supplied by this update may wait for its planned stop.
+/// Bind accepted pending values to Review without displaying credentials.
+fn pending_configuration(pending: &Value, application: &[(String, String)]) -> Result<Value, String> {
+    let items = pending.as_array().ok_or("Pending configuration is unreadable")?;
+    let mut changes = serde_json::Map::new();
+    for item in items {
+        let value = item.get("pending").filter(|value| !value.is_null());
+        let deleted = item
+            .get("delete")
+            .is_some_and(|value| !value.is_null() && value.as_u64() != Some(0) && value.as_bool() != Some(false));
+        if value.is_none() && !deleted {
+            continue;
+        }
+        let key = item["key"].as_str().ok_or("Pending configuration key is unreadable")?;
+        if key != "env" || deleted {
+            return Err(format!("Pending configuration requires review: {key}"));
+        }
+        let parse = |value: &Value| -> Result<std::collections::BTreeMap<String, String>, String> {
+            let text = match value {
+                Value::Null => "",
+                Value::String(text) => text,
+                _ => return Err("Pending environment is unreadable".into()),
+            };
+            let entries = node::parse_env(text);
+            if entries.len() != text.split('\0').filter(|entry| !entry.is_empty()).count() {
+                return Err("Pending environment is invalid".into());
+            }
+            super::schema3::validate_environment(&entries)?;
+            Ok(entries.into_iter().collect())
+        };
+        let before = parse(&item["value"])?;
+        let after = parse(value.ok_or("Pending environment is unreadable")?)?;
+        if before.keys().any(|key| !after.contains_key(key))
+            || after
+                .iter()
+                .any(|(key, value)| before.get(key) != Some(value) && !application.iter().any(|entry| entry.0 == *key))
+        {
+            return Err("Pending environment changes variables outside Application configuration; review it in Services before updating the image".into());
+        }
+        if changes
+            .insert(key.into(), json!({"value": before, "pending": after}))
+            .is_some()
+        {
+            return Err("Duplicate pending environment entries require review".into());
+        }
+    }
+    Ok(Value::Object(changes))
+}
+
 /// What would keep the old container's settings from carrying over.
-async fn safe_config(pve: &impl Pve, instance: &Instance, cfg: &Value) -> Result<bool, CoreError> {
+async fn safe_config(
+    pve: &impl Pve,
+    instance: &Instance,
+    cfg: &Value,
+    application: &[(String, String)],
+) -> Result<(bool, Value), CoreError> {
     if cfg.get("lock").is_some()
         || cfg.get("protection").is_some_and(|v| v.as_u64() != Some(0))
         || cfg.get("template").is_some_and(|v| v.as_u64() != Some(0))
@@ -198,16 +252,10 @@ async fn safe_config(pve: &impl Pve, instance: &Instance, cfg: &Value) -> Result
         ));
     }
     let pending = pve.get(&format!("{base}/pending"), &[]).await?;
-    if pending.as_array().is_none_or(|items| {
-        items
-            .iter()
-            .any(|i| i.get("pending").is_some() || i["delete"].as_u64() == Some(1))
-    }) {
-        return Err(CoreError::Refused("Pending configuration requires review".to_owned()));
-    }
+    let pending = pending_configuration(&pending, application).map_err(CoreError::Refused)?;
     match status["status"].as_str() {
-        Some("running") => Ok(true),
-        Some("stopped") => Ok(false),
+        Some("running") => Ok((true, pending)),
+        Some("stopped") => Ok((false, pending)),
         _ => Err(CoreError::Refused("Container power state unavailable".to_owned())),
     }
 }
@@ -331,6 +379,16 @@ pub async fn plan(
     if source.manifest.schema3.is_some() {
         plan.lines.push("Image replacement discards all rootfs-local application data, including any unsent exporter queue. Ordinary CT restarts preserve it.".into());
         for target in &plan.targets {
+            if plan
+                .reviewed
+                .get(&target.ctid)
+                .is_some_and(|state| state.pending_environment)
+            {
+                plan.lines.push(format!(
+                    "CT {}: pending application settings will be replaced with the selected configuration during image replacement",
+                    target.ctid
+                ));
+            }
             match application_environment(&plan.selection_root, source, target) {
                 Ok(environment) => {
                     let changed: Vec<&str> = environment
@@ -517,7 +575,12 @@ async fn review(
         }
         effective_devices(source, &target)?;
         preflight(pve, config, &target, &plan.backup_storage).await?;
-        let reviewed = reviewed_state(pve, &target, &plan.image, &plan.digest)
+        let application = if source.manifest.schema3.is_some() {
+            application_environment(&plan.selection_root, source, &target)?
+        } else {
+            Vec::new()
+        };
+        let reviewed = reviewed_state(pve, &target, &plan.image, &plan.digest, &application)
             .await
             .map_err(safety_message)?;
         plan.reviewed.insert(target.ctid, reviewed);
@@ -788,6 +851,7 @@ async fn restore_autostart(pve: &impl Pve, node: &str, ctid: u32, enabled: bool)
 struct Reviewed {
     root_image: bool,
     fingerprint: [u8; 32],
+    pending_environment: bool,
     recovery_operation: Option<String>,
     power: (bool, bool),
 }
@@ -863,7 +927,13 @@ fn safety_message(error: CoreError) -> String {
 
 /// Review recovery as its own exact state, including both the real target and
 /// holder. No arbitrary configuration drift is exempted by a recovery flag.
-async fn reviewed_state(pve: &impl Pve, target: &Instance, image: &str, digest: &str) -> Result<Reviewed, CoreError> {
+async fn reviewed_state(
+    pve: &impl Pve,
+    target: &Instance,
+    image: &str,
+    digest: &str,
+    application: &[(String, String)],
+) -> Result<Reviewed, CoreError> {
     let resources = pve.get("/cluster/resources", &[("type", "vm")]).await?;
     let resources = resources
         .as_array()
@@ -902,6 +972,7 @@ async fn reviewed_state(pve: &impl Pve, target: &Instance, image: &str, digest: 
         ));
     }
     let mut states = Vec::new();
+    let mut pending_environment = false;
     let mut root_image_operation = target.description.lines().any(|line| line.starts_with(root_image::OLD));
     let mut recovery_operation = None;
     let mut power = original_power(target).map_err(CoreError::Refused)?;
@@ -944,7 +1015,9 @@ async fn reviewed_state(pve: &impl Pve, target: &Instance, image: &str, digest: 
         }
         let mut subject = target.clone();
         subject.ctid = id;
-        let running = safe_config(pve, &subject, &cfg).await?;
+        let (running, pending) =
+            safe_config(pve, &subject, &cfg, if id == target.ctid { application } else { &[] }).await?;
+        pending_environment |= pending.get("env").is_some();
         let mut volume_check = cfg.clone();
         for key in root_image::temporary_fields(&cfg, target.ctid).map_err(CoreError::Refused)? {
             if key.starts_with("unused") {
@@ -1040,7 +1113,7 @@ async fn reviewed_state(pve: &impl Pve, target: &Instance, image: &str, digest: 
             return Err(CoreError::Refused("Root/home volume ownership is unproven".to_owned()));
         }
         states.push(
-            json!({"id": id, "running": running, "config": configuration_identity(cfg).map_err(CoreError::Refused)?}),
+            json!({"id": id, "running": running, "pending": pending, "config": configuration_identity(cfg).map_err(CoreError::Refused)?}),
         );
     }
     if target.held && recovery_operation.is_none() {
@@ -1056,6 +1129,7 @@ async fn reviewed_state(pve: &impl Pve, target: &Instance, image: &str, digest: 
     Ok(Reviewed {
         root_image: root_image_operation,
         fingerprint: Sha256::digest(bytes).into(),
+        pending_environment,
         recovery_operation,
         power,
     })
@@ -1087,7 +1161,12 @@ async fn one(
         .reviewed
         .get(&ctid)
         .ok_or("No reviewed replacement configuration")?;
-    let current = reviewed_state(pve, target, &plan.image, &plan.digest)
+    let application = if source.manifest.schema3.is_some() {
+        application_environment(&plan.selection_root, source, target)?
+    } else {
+        Vec::new()
+    };
+    let current = reviewed_state(pve, target, &plan.image, &plan.digest, &application)
         .await
         .map_err(safety_message)?;
     if current != *reviewed {
@@ -1097,12 +1176,11 @@ async fn one(
     let rollback = previous_release(target, reviewed.recovery_operation.is_some())?
         .filter(|previous| previous.image != plan.image || previous.digest != plan.digest);
     // Every read/authorization check precedes the first environment or PVE write.
-    if source.manifest.schema3.is_some() {
-        let environment = application_environment(&plan.selection_root, source, target)?;
-        if !target.held && environment.iter().any(|entry| !target.environment.contains(entry)) {
-            say(&format!("{node}: CT {ctid} · Application configuration"));
-            deploy::set_application_environment(pve, node, ctid, &environment, &[]).await?;
-        }
+    if !target.held
+        && (reviewed.pending_environment || application.iter().any(|entry| !target.environment.contains(entry)))
+    {
+        say(&format!("{node}: CT {ctid} · Application configuration"));
+        deploy::set_application_environment(pve, node, ctid, &application, &[]).await?;
     }
     let (was_running, was_onboot) = reviewed.power;
     let operation = reviewed

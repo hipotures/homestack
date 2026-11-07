@@ -492,3 +492,12 @@ from the queue. A successful send removes its pending message. A lost response
 or interruption between Telegram acceptance and local acknowledgement can cause
 a duplicate on retry; Telegram sendMessage has no idempotency key. Telegram
 outages do not change service readiness.
+
+An image update accepts an already pending `env` change only when every changed
+variable is supplied by the application configuration selected for that update
+and no existing variable is removed. These pending values are included in the
+reviewed state fingerprint. Before replacement, the selected application values
+replace any older pending values, then take effect during the normal stop/start.
+Other pending configuration changes still require review; the error identifies
+the field without printing its value. A separate restart is not required for
+matching application settings.
