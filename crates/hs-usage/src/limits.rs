@@ -107,7 +107,18 @@ pub async fn read(
                     value["current"][name] = json!(v);
                 }
             } else {
-                value["history"][name] = json!(points);
+                // Relabeled series (e.g. after a service update) continue the same window history.
+                let mut merged: Vec<(f64, f64)> =
+                    serde_json::from_value(value["history"][name].take()).unwrap_or_default();
+                merged.extend(points);
+                merged.sort_by(|a, b| a.0.total_cmp(&b.0));
+                merged.dedup_by(|a, b| {
+                    a.0 == b.0 && {
+                        b.1 = b.1.max(a.1);
+                        true
+                    }
+                });
+                value["history"][name] = json!(merged);
             }
         }
     }

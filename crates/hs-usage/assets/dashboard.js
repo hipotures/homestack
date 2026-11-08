@@ -277,7 +277,7 @@
     for(const w of windows){
       if(!chosen().includes(w.agent))continue;
       const history=w.history||{},current=w.current;
-      const minutesAt=t=>{let v=null;for(const [at,n]of history.window_minutes||[])if(at<=t)v=n;return v;};
+      const minutesAt=t=>{let v=null;for(const [at,n]of history.window_minutes||[])if(at<=t||v==null)v=n;return v??current?.window_minutes??null;};
       const relevant=m=>m>0&&(weekly?m===10080:m<1440);
       const who=`${agents[w.agent]}${w.group?" · "+w.group:""}`;
       const resets=new Map(history.reset_timestamp_seconds||[]),used=new Map(history.used_percent||[]),exhausted=new Map(history.exhausted||[]);
@@ -286,8 +286,8 @@
         for(const t of [...new Set([...used.keys(),...exhausted.keys()])].sort((a,b)=>a-b)){
           const full=(used.get(t)??0)>=100||exhausted.get(t)===1,reset=resets.get(t);
           if(full&&(!wasFull||(reset!=null&&previousReset!=null&&reset!==previousReset)||t-previous>(dataset?.details?.sample_step||300)*1.5)&&t>=range.start&&t<=range.end){
-            const minutes=minutesAt(t),duration=minutes>0?(minutes%1440===0?`${minutes/1440}-day`:`${minutes/60}-hour`):null;
-            const kind=[w.label,duration].filter((v,i,a)=>v&&a.indexOf(v)===i).join(" · ");
+            const minutes=minutesAt(t),duration=minutes>0?(minutes%1440===0?`${minutes/1440}-day`:minutes%60===0?`${minutes/60}-hour`:`${minutes}-minute`):"";
+            const kind=[duration,w.label!==duration&&w.label?.toLowerCase()!==w.agent?w.label:""].filter(Boolean).join(" · ")||w.window;
             events.push({xAxis:t*1000,name:`${who} · ${kind} · limit exhausted (observed)`,label:{formatter:`${agents[w.agent]} · ${kind}`},lineStyle:{color:AIUsage.colorFor(agents[w.agent])}});
           }
           wasFull=full;previous=t;previousReset=reset;
