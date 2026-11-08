@@ -186,7 +186,8 @@ async function refresh() {
           fill.style.width = `${Math.min(100, limit.used_percent)}%`; bar.append(fill); quota.append(bar);
         }
         quota.append(resetLine(profile, limit));
-        quota.append(node('span', limit.exhausted ? 'Provider reports an exhausted limit' : '', 'warn slot'));
+        const exhausted = limit.exhausted ?? (limit.used_percent != null && limit.used_percent >= 100);
+        quota.append(node('span', exhausted ? 'Usage limit reached' : '', 'warn slot'));
         quotas.append(quota);
       }
       card.append(quotas);
