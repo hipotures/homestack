@@ -67,12 +67,15 @@ function label(limit, provider) {
   return [duration, name].filter(Boolean).join(' · ') || limit.id;
 }
 // A window whose reset is unknown, or always a full window away, has not started: usage begins the clock.
-// A reset one window after a completed start request belongs to that freshly started window.
+// Codex reports a started window only on a later check, so a completed start request counts as started
+// until its window would end.
+function startedReset(limit, started) {
+  const span = (limit.window_minutes || 0) * 60;
+  return span && started && started + span > Date.now() / 1000 ? started + span : null;
+}
 function notStarted(limit, observed, started) {
-  if (limit.used_percent !== 0 || !limit.window_minutes) return false;
-  const span = limit.window_minutes * 60;
-  if (limit.resets_at && started && Math.abs(limit.resets_at - started - span) <= 120) return false;
-  return !limit.resets_at || limit.resets_at - observed >= span - 120;
+  if (limit.used_percent !== 0 || !limit.window_minutes || startedReset(limit, started)) return false;
+  return !limit.resets_at || limit.resets_at - observed >= limit.window_minutes * 60 - 120;
 }
 const playIcon = '<svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><path d="M2 1l7 4-7 4z" fill="currentColor"/></svg>';
 function resetLine(profile, limit) {
@@ -88,7 +91,12 @@ function resetLine(profile, limit) {
     start.insertAdjacentHTML('afterbegin', playIcon);
     start.title = `Start ${name} window`;
     start.setAttribute('aria-label', start.title);
-  } else line.append(node('span', limit.resets_at ? 'Resets ' + time(limit.resets_at) : 'Reset time unknown', 'meta'));
+  } else {
+    // While Codex still reports the pre-start state, the reset follows from the start request.
+    const fresh = limit.used_percent === 0 && startedReset(limit, profile.window_started_at);
+    const reset = fresh && (!limit.resets_at || limit.resets_at - profile.snapshot.observed_at >= limit.window_minutes * 60 - 120) ? fresh : limit.resets_at;
+    line.append(node('span', reset ? 'Resets ' + time(reset) : 'Reset time unknown', 'meta'));
+  }
   return line;
 }
 function confirmStart(name, minutes) {
