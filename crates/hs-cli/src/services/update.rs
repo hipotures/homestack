@@ -419,17 +419,6 @@ pub async fn plan(
         };
         let current = target.image.rsplit_once(':').map_or("unknown", |(_, v)| v);
         let state = if target.running { "running" } else { "stopped" };
-        if operation(&target.description).is_ok_and(|op| op.is_some())
-            && plan
-                .reviewed
-                .get(&target.ctid)
-                .is_some_and(|reviewed| reviewed.recovery_operation.is_none())
-        {
-            plan.lines.push(format!(
-                "CT {}: the previous image replacement restored its volumes but did not pass health verification; replacing that image with {version}.",
-                target.ctid
-            ));
-        }
         plan.lines.extend([
             format!("{} · {} · CT {}", target.hostname, target.node, target.ctid),
             String::new(),
