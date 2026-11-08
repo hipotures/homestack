@@ -297,25 +297,21 @@
       }
       if(enabledPeriods){
         const periods=new Map();
-        for(const [t,reset]of resets){const minutes=minutesAt(t);if(relevant(minutes)&&reset<=now&&reset>=range.start&&reset-minutes*60<=range.end)periods.set(reset,{reset,minutes,live:false});}
-        if(current&&relevant(current.window_minutes)&&current.reset_timestamp_seconds>now&&current.reset_timestamp_seconds<=now+current.window_minutes*60+3600){
-          const reset=current.reset_timestamp_seconds;periods.set(reset,{reset,minutes:current.window_minutes,live:true});end=Math.max(end,reset);
+        const addPeriod=(reset,minutes,live)=>{
+          // Providers can correct the same reset by a few seconds between observations.
+          for(const [key,p]of periods)if(p.minutes===minutes&&Math.abs(key-reset)<=120)periods.delete(key);
+          periods.set(reset,{reset,minutes,live});
+        };
+        for(const [t,reset]of resets){const minutes=minutesAt(t);if(used.get(t)>0&&relevant(minutes)&&reset-t<minutes*60-120&&reset<=now&&reset>=range.start&&reset-minutes*60<=range.end)addPeriod(reset,minutes,false);}
+        if(current&&current.used_percent>0&&relevant(current.window_minutes)&&current.reset_timestamp_seconds>now&&current.reset_timestamp_seconds<=now+current.window_minutes*60+3600){
+          const reset=current.reset_timestamp_seconds;addPeriod(reset,current.window_minutes,true);end=Math.max(end,reset);
         }
         for(const {reset,minutes,live}of periods.values()){
           const until=live?reset:Math.min(reset,range.end),start=Math.max(range.start,reset-minutes*60);
           if(until<=start)continue;
-          areas.push([{name:`${who} · ${minutes===10080?"7-day":minutes/60+"-hour"} reset ${new Date(reset*1000).toLocaleString()}`,xAxis:start*1000,label:{formatter:`${timeLabel(reset,range)} · ${agents[w.agent]}${w.group?" · "+w.group.replace("Claude and GPT models","Claude & GPT").replace("Gemini Models","Gemini"):""} · ${minutes===10080?"7d":minutes/60+"h"}`},itemStyle:{color:AIUsage.colorFor(agents[w.agent]),opacity:.07}},{xAxis:until*1000}]);
+          areas.push([{name:`${who} · ${minutes===10080?"7-day":minutes/60+"-hour"} reset ${new Date(reset*1000).toLocaleString()}`,xAxis:start*1000,itemStyle:{color:AIUsage.colorFor(agents[w.agent]),opacity:.04}},{xAxis:until*1000}]);
         }
       }
-    }
-    const labelWidth=Math.max(120,Math.min(300,$("trend-chart").clientWidth-40));
-    const labelSpan=(end-range.start)*labelWidth/Math.max(1,$("trend-chart").clientWidth-80),lanes=[];
-    for(const area of [...areas].sort((a,b)=>a[1].xAxis-b[1].xAxis)){
-      const edge=area[1].xAxis/1000;
-      let lane=lanes.findIndex(right=>right<edge-labelSpan);
-      if(lane<0)lane=lanes.length;
-      lanes[lane]=edge;
-      Object.assign(area[0].label,{offset:[0,lane*18],width:labelWidth});
     }
     return {events,areas,end};
   }
@@ -411,7 +407,7 @@
         markPoint:i===visible.length-1&&peak[1]>0?{...AIUsage.peak(()=>`peak ${timeLabel(peak[0],range)}  ${fmtShort(peak[1])}`),data:[{coord:[peak[0]*1000,peak[1]]}]}:undefined,
       })), {id:"quota-overlay",type:"line",data:[],showSymbol:false,silent:false,
         markLine:{symbol:["none","none"],lineStyle:{type:"dashed",width:1.5},label:{show:true,position:"insideEndTop",fontSize:10,color:css("--muted"),backgroundColor:css("--bg"),padding:3},data:markerEvents},
-        markArea:{silent:false,label:{show:true,position:"insideTopRight",distance:8,color:css("--muted"),fontSize:10,overflow:"truncate",width:210},tooltip:{formatter:p=>esc(p.name)},data:overlay.areas}
+        markArea:{silent:false,label:{show:false},emphasis:{itemStyle:{opacity:.12}},tooltip:{trigger:"item",formatter:p=>esc(p.name)},data:overlay.areas}
       },brushSeries(selected)],
     },{replaceMerge:["series"]});
   }
