@@ -46,7 +46,10 @@ if ((full)); then
     step "static analysis"
     cargo clippy --workspace --all-targets --locked -- -D warnings
     step "retained Rust checks (live scenarios remain opt-in)"
-    cargo test --workspace --locked
+    cargo test --workspace --exclude hs-e2e --locked
+    # E2E checks create executable fixtures. Concurrent forks can inherit a fixture's
+    # writable descriptor and make its execution fail with ETXTBSY even after close.
+    cargo test -p hs-e2e --locked -- --test-threads=1
     step "shell scripts"
     uvx --from shellcheck-py==0.10.0.1 shellcheck -x scripts/live-probe-import-from.sh
 fi
