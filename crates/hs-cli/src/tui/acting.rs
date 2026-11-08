@@ -655,18 +655,21 @@ impl App {
         else {
             return;
         };
-        if let (Stage::Form(form), Ok(images)) = (&mut action.stage, &images)
-            && let Some(Field {
+        if let (Stage::Form(form), Ok(images)) = (&mut action.stage, &images) {
+            // An Enter pressed while the images were read no longer applies.
+            form.error = None;
+            if let Some(Field {
                 input: Input::Choice { options, index },
                 note,
                 ..
             }) = form.fields.first_mut()
-        {
-            if images.resume.is_some() {
-                *note = "↵ reviews the interrupted update; confirmation resumes it.".to_owned();
+            {
+                if images.resume.is_some() {
+                    *note = "↵ reviews the interrupted update; confirmation resumes it.".to_owned();
+                }
+                *options = images.published.iter().map(|image| image.label()).collect();
+                *index = 0;
             }
-            *options = images.published.iter().map(|image| image.label()).collect();
-            *index = 0;
         }
         self.images = Some(images);
     }
