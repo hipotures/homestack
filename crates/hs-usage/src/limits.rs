@@ -23,7 +23,8 @@ pub async fn read(
     } else {
         format!(r#"{},provider="{}"}}"#, SELECTOR.trim_end_matches('}'), selection.agent)
     };
-    // Preserve short exhaustion observations when a long view uses coarse buckets.
+    // Preserve short exhaustion observations when a long view uses coarse buckets. `or` matches
+    // series without their metric name, so a distinct `quantity` label keeps every metric.
     let history_query = [
         "used_percent",
         "exhausted_ratio",
@@ -38,7 +39,9 @@ pub async fn read(
         } else {
             "last_over_time"
         };
-        format!(r#"label_replace({aggregate}({metric}{provider}[{step}s]),"__name__","{metric}","","")"#)
+        format!(
+            r#"label_replace(label_replace({aggregate}({metric}{provider}[{step}s]),"__name__","{metric}","",""),"quantity","{name}","","")"#
+        )
     })
     .collect::<Vec<_>>()
     .join(" or ");
