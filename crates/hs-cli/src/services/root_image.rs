@@ -177,7 +177,13 @@ pub fn validate_stage(cfg: &Value, ctid: u32) -> Result<(), String> {
 
 /// New image is unpacked in a stopped staging CT. Transfer its root as a volume,
 /// then switch the original CT's rootfs while keeping its identity, home and devices.
-pub async fn replace(pve: &impl Pve, spec: &NewContainer<'_>, say: &(impl Fn(&str) + ?Sized)) -> Result<(), String> {
+/// Original environment entries equal to the old image's `defaults` give way to the new image.
+pub async fn replace(
+    pve: &impl Pve,
+    spec: &NewContainer<'_>,
+    defaults: &[(String, String)],
+    say: &(impl Fn(&str) + ?Sized),
+) -> Result<(), String> {
     let node = spec.node;
     let id = spec.ctid;
     let mut original = config(pve, node, id).await?;
@@ -355,10 +361,10 @@ pub async fn replace(pve: &impl Pve, spec: &NewContainer<'_>, say: &(impl Fn(&st
             format!("{new},{options}")
         };
         let old_mount = format!("{},mp={OLD_PATH},backup=0", volume(&old));
-        let environment = node::merge_env(
+        let environment = node::carried_env(
             &node::parse_env(text(&staged, "env")),
             &node::parse_env(text(&original, "env")),
-            &[],
+            defaults,
         );
         let pending = format!("{}\n{NEW}{new}", text(&original, "description"));
         let mut fields = vec![

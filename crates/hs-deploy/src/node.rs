@@ -348,6 +348,15 @@ pub fn merge_env(current: &[(String, String)], set: &[(String, String)], remove:
         .join("\0")
 }
 
+/// The environment a replaced container gets: the new image's entries, with
+/// those of the old container that differ from its old image's `defaults`
+/// set over them. Unchanged old image defaults give way to the new image.
+#[must_use]
+pub fn carried_env(new_image: &[(String, String)], old: &[(String, String)], defaults: &[(String, String)]) -> String {
+    let changed: Vec<_> = old.iter().filter(|entry| !defaults.contains(entry)).cloned().collect();
+    merge_env(new_image, &changed, &[])
+}
+
 /// Change the container's environment: `set` added, `remove` taken out,
 /// the image's own entries kept.
 pub async fn set_env(

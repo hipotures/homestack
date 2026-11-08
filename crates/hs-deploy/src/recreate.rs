@@ -20,6 +20,9 @@ pub struct Replace<'a> {
     /// new image's own entries. The holder also preserves these for containers
     /// without mount-point volumes.
     pub keep: &'a [&'a str],
+    /// The old image's own environment: old entries equal to these are not
+    /// carried over, so the new image's defaults apply.
+    pub defaults: &'a [(String, String)],
     /// Lines the holder's description carries for whoever resumes the
     /// replacement while the old container is gone.
     pub note: &'a str,
@@ -352,7 +355,7 @@ async fn finish(pve: &impl Pve, r: &Replace<'_>, say: &impl Fn(&str)) -> Result<
     fields.extend(crate::devices::fields(&devices));
     for (key, value) in &mut fields {
         if key == "env" {
-            *value = node::merge_env(&node::parse_env(text(&new, "env")), &node::parse_env(value), &[]);
+            *value = node::carried_env(&node::parse_env(text(&new, "env")), &node::parse_env(value), r.defaults);
         }
     }
     if !fields.is_empty() {

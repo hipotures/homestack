@@ -1195,6 +1195,18 @@ async fn one(
     same_mount(source, target)?;
     let rollback = previous_release(target, reviewed.recovery_operation.is_some())?
         .filter(|previous| previous.image != plan.image || previous.digest != plan.digest);
+    // The old image's defaults give way to the new image's; application
+    // settings are always carried.
+    let (old_image, old_digest) = rollback.as_ref().map_or((&plan.image, &plan.digest), |previous| {
+        (&previous.image, &previous.digest)
+    });
+    let mut defaults = node::parse_env(
+        &hs_core::registry::environment(old_image, old_digest)
+            .await
+            .map_err(|e| format!("CT {ctid}: previous image environment: {e}"))?
+            .join("\0"),
+    );
+    defaults.retain(|(key, _)| !application.iter().any(|entry| entry.0 == *key));
     // Every read/authorization check precedes the first environment or PVE write.
     if !target.held
         && (reviewed.pending_environment || application.iter().any(|entry| !target.environment.contains(entry)))
@@ -1311,13 +1323,14 @@ async fn one(
                 spec,
                 graceful: true,
                 keep: KEEP,
+                defaults: &defaults,
                 note: &note,
             },
             &|line| say(line),
         )
         .await?;
     } else {
-        root_image::replace(pve, &spec, say).await?;
+        root_image::replace(pve, &spec, &defaults, say).await?;
     }
     if reviewed.root_image {
         let cfg = root_image::config(pve, node, ctid).await?;

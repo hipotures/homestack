@@ -358,13 +358,11 @@ fn is_digest(text: &str) -> bool {
         .is_some_and(|hex| hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
-/// The digest of `image` and of its linux/amd64 image; an error when the
-/// tag has no linux/amd64 image (an index's attestations are skipped).
-pub async fn resolve(image: &str) -> Result<Resolved, String> {
-    let (host, path, tag) = split(image).ok_or_else(|| format!("{image} is not REGISTRY/PATH:TAG"))?;
-    let registry = Registry::open(host, path).await?;
+/// The digest `reference` names in `registry`, its linux/amd64 image's
+/// digest and that image's configuration.
+async fn platform_config(registry: &Registry, image: &str, reference: &str) -> Result<(String, String, Value), String> {
     let (manifest, digest) = registry
-        .get_digest(&format!("manifests/{tag}"), Some(MANIFESTS))
+        .get_digest(&format!("manifests/{reference}"), Some(MANIFESTS))
         .await?;
     let digest = digest
         .filter(|digest| is_digest(digest))
@@ -389,11 +387,46 @@ pub async fn resolve(image: &str) -> Result<Resolved, String> {
     if config["os"] != "linux" || config["architecture"] != "amd64" {
         return Err(format!("{image} is not a linux/amd64 image"));
     }
+    Ok((digest, platform, config))
+}
+
+/// The digest of `image` and of its linux/amd64 image; an error when the
+/// tag has no linux/amd64 image (an index's attestations are skipped).
+pub async fn resolve(image: &str) -> Result<Resolved, String> {
+    let (host, path, tag) = split(image).ok_or_else(|| format!("{image} is not REGISTRY/PATH:TAG"))?;
+    let registry = Registry::open(host, path).await?;
+    let (digest, platform, config) = platform_config(&registry, image, tag).await?;
     Ok(Resolved {
         digest,
         platform,
         created: config["created"].as_str().map(str::to_owned),
     })
+}
+
+/// The `NAME=value` environment the linux/amd64 image of `image` at
+/// `digest` declares.
+pub async fn environment(image: &str, digest: &str) -> Result<Vec<String>, String> {
+    let (host, path, _) = split(image).ok_or_else(|| format!("{image} is not REGISTRY/PATH:TAG"))?;
+    if !is_digest(digest) {
+        return Err(format!("{image}: invalid recorded digest"));
+    }
+    let registry = Registry::open(host, path).await?;
+    let (found, _, config) = platform_config(&registry, image, digest).await?;
+    if found != digest {
+        return Err(format!("{image}: the registry returned another digest"));
+    }
+    let Some(entries) = config["config"]["Env"].as_array() else {
+        return Ok(Vec::new());
+    };
+    entries
+        .iter()
+        .map(|entry| {
+            entry
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| format!("{image}: invalid image environment"))
+        })
+        .collect()
 }
 
 /// The image reference recorded by HomeStack's deployer.
