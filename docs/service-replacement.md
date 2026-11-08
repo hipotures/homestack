@@ -44,8 +44,10 @@ Explicit service deletion has different semantics, described below.
 
 ## Same-CTID replacement
 
-API servers, Pangolin connectors and deployed services update their image the
-same way, through `hs_deploy::recreate` and the scoped Proxmox API token only.
+API servers, Pangolin connectors and deployed services update their image
+through the scoped Proxmox API token only. Containers with additional mounts
+or device mappings switch only their root disk; other containers use
+`hs_deploy::recreate`.
 The container keeps its CTID, so the CTID stays tied to its IP address.
 
 - A root-only container is stopped, destroyed and made again from the new
@@ -68,9 +70,18 @@ The container keeps its CTID, so the CTID stays tied to its IP address.
   under the same CTID with the original `net0` including its MAC, the volumes
   move back with their mount options, the kept configuration is merged over the
   new image's own entries and the holder is removed.
-- The common update review refuses extra mount points or networks, bind/network
-  mounts, devices, unused volumes, hooks, unsupported custom LXC configuration,
+- Containers with additional `mpN` mounts use the root disk switch described
+  below. Every mount stays attached to the original CT with its source, path
+  and options unchanged. This supports multiple Proxmox storage volumes and
+  host bind mounts, including host-mounted NFS shares and local filesystems.
+  Review lists the additional mounts and verifies them again before starting
+  the updated service. Data is not copied between filesystems. Mounts created
+  only inside the disposable root must be configured separately.
+- The common update review refuses extra networks, unused volumes, hooks,
+  unsupported custom LXC configuration (including raw `lxc.mount.entry`),
   snapshots, custom firewall configuration, HA and replication jobs.
+  `mp255` is reserved for root image transfer; an existing persistent mount
+  in that slot must be moved to another slot before updating.
 
 After a successful update HomeStack removes the images it pulled and no longer
 needs from the template storage: the service's `hs-<ctid>-*` archives, older
@@ -224,10 +235,10 @@ attached in Proxmox. The deploy token cannot add or change device mappings.
 New deployments declaring devices require attachment authorization not available
 to that token and are refused before creating a container.
 
-Existing device-bearing containers update through the Proxmox API by switching
+Containers with devices or additional mount points update through the Proxmox API by switching
 only their root disk. A stopped staging CT (`999999`) unpacks the new OCI image;
 its image volume is reassigned to the original CT through reserved `mp255`,
-then becomes `rootfs`. The original CTID, `devN`, network and persistent `mp0`
+then becomes `rootfs`. The original CTID, `devN`, network and all persistent `mpN` mounts
 remain in place. No SSH connection or device-field writes occur.
 
 The pending operation records the exact previous disposable root in configuration

@@ -177,15 +177,12 @@ async fn safe_config(
         .map(String::as_str)
         .filter(|k| {
             !temporary.iter().any(|key| key == k)
-                && ((k.starts_with("mp") && *k != "mp0")
-                    || (k.starts_with("net") && *k != "net0")
-                    || k.starts_with("unused")
-                    || *k == "hookscript")
+                && ((k.starts_with("net") && *k != "net0") || k.starts_with("unused") || *k == "hookscript")
         })
         .collect();
     if !extra.is_empty() {
         return Err(CoreError::Refused(format!(
-            "Extra disks, networks or hooks require manual review: {}",
+            "Unused disks, extra networks or hooks require manual review: {}",
             extra.join(", ")
         )));
     }
@@ -473,6 +470,13 @@ pub async fn plan(
             ),
             String::new(),
         ]);
+        if let Some(reviewed) = plan.reviewed.get(&target.ctid) {
+            for (slot, mount) in &reviewed.mounts {
+                if slot != "mp0" {
+                    plan.lines.push(format!("  Mount {slot}  {mount} (preserved)"));
+                }
+            }
+        }
         if let Ok(devices) = effective_devices(source, target) {
             for (slot, device) in devices {
                 let action = if target.devices.get(&slot) == Some(&device) {
@@ -850,6 +854,7 @@ async fn restore_autostart(pve: &impl Pve, node: &str, ctid: u32, enabled: bool)
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Reviewed {
     root_image: bool,
+    mounts: std::collections::BTreeMap<String, String>,
     fingerprint: [u8; 32],
     pending_environment: bool,
     recovery_operation: Option<String>,
@@ -865,12 +870,13 @@ fn configuration_identity(mut cfg: Value) -> Result<Value, String> {
             "env" => '\0',
             "tags" => ';',
             "rootfs" | "mp0" | "net0" | "features" => ',',
+            _ if key.strip_prefix("mp").is_some_and(|n| n.parse::<u32>().is_ok()) => ',',
             _ => continue,
         };
         let mut parts: Vec<_> = text.split(separator).collect();
         // A volume's leading value has meaning. Duplicate option/env keys
         // may be order-sensitive, so do not normalize their order.
-        let offset = usize::from(matches!(key.as_str(), "rootfs" | "mp0"));
+        let offset = usize::from(key == "rootfs" || key.starts_with("mp"));
         if let Some(options) = parts.get_mut(offset..) {
             let keys: std::collections::BTreeSet<_> = options.iter().map(|part| part.split('=').next()).collect();
             if keys.len() == options.len() {
@@ -973,6 +979,8 @@ async fn reviewed_state(
     }
     let mut states = Vec::new();
     let mut pending_environment = false;
+    let mut mounts = std::collections::BTreeMap::new();
+    let mut has_extra_mounts = false;
     let mut root_image_operation = target.description.lines().any(|line| line.starts_with(root_image::OLD));
     let mut recovery_operation = None;
     let mut power = original_power(target).map_err(CoreError::Refused)?;
@@ -1027,7 +1035,19 @@ async fn reviewed_state(
                     .remove(&key);
             }
         }
-        recreate::mounts(&volume_check).map_err(CoreError::Refused)?;
+        let persistent = root_image::persistent_mounts(&volume_check, target.ctid).map_err(CoreError::Refused)?;
+        let extra = persistent.keys().any(|key| key != "mp0");
+        if id == target.ctid {
+            has_extra_mounts = extra;
+            mounts = persistent;
+        }
+        if !extra {
+            recreate::mounts(&volume_check).map_err(CoreError::Refused)?;
+        } else if target.held || id == recreate::HOLDER_ID {
+            return Err(CoreError::Refused(
+                "Finish the pending holder replacement before updating containers with additional mounts".into(),
+            ));
+        }
         let description = text(&cfg, "description");
         let op = operation(description).map_err(CoreError::Refused)?;
         if id == recreate::HOLDER_ID {
@@ -1127,7 +1147,8 @@ async fn reviewed_state(
     }))
     .map_err(|_| CoreError::Refused("Cannot bind replacement configuration".to_owned()))?;
     Ok(Reviewed {
-        root_image: root_image_operation,
+        root_image: root_image_operation || has_extra_mounts,
+        mounts,
         fingerprint: Sha256::digest(bytes).into(),
         pending_environment,
         recovery_operation,
@@ -1298,6 +1319,12 @@ async fn one(
         .await?;
     } else {
         root_image::replace(pve, &spec, say).await?;
+    }
+    if reviewed.root_image {
+        let cfg = root_image::config(pve, node, ctid).await?;
+        if root_image::persistent_mounts(&cfg, ctid)? != reviewed.mounts {
+            return Err(format!("CT {ctid}: persistent mount restoration failed; container left stopped").into());
+        }
     }
     let new = instance::read_on(pve, node, ctid).await?;
     let differences: Vec<&str> = [

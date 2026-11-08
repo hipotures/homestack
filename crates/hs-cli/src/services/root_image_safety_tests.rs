@@ -7,6 +7,9 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 const TASK: &str = "UPID:pve2:00000001:00000001:00000001:task:1:operator@pve:";
 const HOME: &str = "local-lvm:vm-120-disk-1,mp=/config,backup=1,size=10G";
+const NFS: &str = "/mnt/nfs/tklivetracker,mp=/home/app/vbc1,backup=0,ro=1";
+const LOCAL: &str = "/mnt/wdred/ztz,mp=/home/app/vbc2,backup=0";
+const DISK: &str = "local-lvm:vm-120-disk-3,mp=/home/app/archive,size=20G,backup=1";
 const DEVICE: &str = "/dev/serial/by-id/usb-test";
 struct State {
     cts: BTreeMap<u32, Value>,
@@ -20,6 +23,9 @@ impl Fake {
         state.mutations += 1;
         assert_eq!(state.cts[&120]["mp0"], HOME);
         assert_eq!(state.cts[&120]["dev0"], DEVICE);
+        assert_eq!(state.cts[&120]["mp1"], NFS);
+        assert_eq!(state.cts[&120]["mp2"], LOCAL);
+        assert_eq!(state.cts[&120]["mp10"], DISK);
         if state.interrupt == Some(state.mutations) {
             state.interrupt = None;
             return Err(PveError::Response("simulated interrupted response".into()));
@@ -108,7 +114,10 @@ impl Pve for Fake {
         for (key, value) in form {
             assert!(!key.starts_with("dev"));
             if id == 120 {
-                assert_ne!(*key, "mp0", "the original home is never written");
+                assert!(
+                    !["mp0", "mp1", "mp2", "mp10"].contains(key),
+                    "persistent mounts are never written"
+                );
             }
             if *key == "digest" {
                 continue;
@@ -144,7 +153,7 @@ async fn root_switch_and_every_interruption_preserve_home_devices_and_ctid() {
         let fake = Fake(Mutex::new(State {
             cts: BTreeMap::from([(
                 120,
-                json!({"digest":"d","description":"HomeStack service homeassistant\nimage registry/app:1.0.0", "rootfs":"local-lvm:vm-120-disk-0,size=8G", "mp0":HOME,"dev0":DEVICE,"env":"TZ=Europe/Warsaw","onboot":1}),
+                json!({"digest":"d","description":"HomeStack service homeassistant\nimage registry/app:1.0.0", "rootfs":"local-lvm:vm-120-disk-0,size=8G", "mp0":HOME,"mp1":NFS,"mp2":LOCAL,"mp10":DISK,"dev0":DEVICE,"env":"TZ=Europe/Warsaw","onboot":1}),
             )]),
             running: true,
             mutations: 0,
@@ -158,6 +167,9 @@ async fn root_switch_and_every_interruption_preserve_home_devices_and_ctid() {
         assert_eq!(state.cts.len(), 1);
         assert_eq!(state.cts[&120]["mp0"], HOME);
         assert_eq!(state.cts[&120]["dev0"], DEVICE);
+        assert_eq!(state.cts[&120]["mp1"], NFS);
+        assert_eq!(state.cts[&120]["mp2"], LOCAL);
+        assert_eq!(state.cts[&120]["mp10"], DISK);
         assert_eq!(state.cts[&120]["description"], spec.description);
         assert_ne!(
             volume(state.cts[&120]["rootfs"].as_str().unwrap()),
@@ -178,4 +190,10 @@ fn root_transfer_metadata_cannot_name_the_persistent_home_or_an_unproven_root() 
     assert!(temporary_fields(&cfg, 120).is_err());
     cfg["description"] = json!("root-image-old local-lvm:vm-120-disk-0\nroot-image-new local-lvm:vm-120-disk-2");
     assert!(temporary_fields(&cfg, 120).is_ok());
+    cfg["mp1"] = json!("local-lvm:vm-120-disk-0,mp=/archive");
+    assert!(persistent_mounts(&cfg, 120).is_err());
+    cfg["mp1"] = json!(NFS);
+    assert!(persistent_mounts(&cfg, 120).is_ok());
+    cfg["mp255"] = json!(LOCAL);
+    assert!(persistent_mounts(&cfg, 120).is_err());
 }

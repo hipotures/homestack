@@ -1,4 +1,4 @@
-//! Replace only the root disk of a device-bearing CT; never rewrite devN or mp0.
+//! Replace only the root disk, preserving every persistent mount and device mapping.
 use hs_core::pve::Pve;
 use hs_deploy::node::{self, NewContainer};
 use hs_deploy::recreate::HOLDER_ID;
@@ -77,6 +77,40 @@ pub fn temporary_fields(cfg: &Value, ctid: u32) -> Result<Vec<String>, String> {
     Ok(fields)
 }
 
+/// Persistent PVE mounts, including host bind mounts backed by NFS or local disks.
+/// The reserved root-transfer slot is excluded only after its metadata is verified.
+pub fn persistent_mounts(cfg: &Value, ctid: u32) -> Result<std::collections::BTreeMap<String, String>, String> {
+    let temporary = temporary_fields(cfg, ctid)?;
+    let mut mounts = std::collections::BTreeMap::new();
+    for (key, value) in cfg.as_object().ok_or("Invalid container configuration")? {
+        if !key.strip_prefix("mp").is_some_and(|n| n.parse::<u32>().is_ok()) || temporary.contains(key) {
+            continue;
+        }
+        if key == SLOT {
+            return Err(format!(
+                "{SLOT} is reserved for root image transfer; move this mount to another slot before updating"
+            ));
+        }
+        let property = value.as_str().ok_or_else(|| format!("{key}: unreadable mount"))?;
+        let source = volume(property);
+        if source.is_empty() || (!source.starts_with('/') && !source.contains(':')) {
+            return Err(format!("{key}: invalid mount source"));
+        }
+        let path = super::manifest::mount_path(property)
+            .ok_or_else(|| format!("{key}: mount path is missing or ambiguous"))?;
+        if !path.starts_with('/') || path == "/" || matches!(path, IMAGE_PATH | OLD_PATH) {
+            return Err(format!("{key}: mount path conflicts with root image replacement"));
+        }
+        if source == volume(text(cfg, "rootfs")) || old_root(cfg)?.is_some_and(|old| source == volume(old)) {
+            return Err(format!("{key}: root and persistent mount separation is unproven"));
+        }
+        let mut options: Vec<_> = property.split(',').skip(1).collect();
+        options.sort_unstable();
+        mounts.insert(key.clone(), format!("{source},{}", options.join(",")));
+    }
+    Ok(mounts)
+}
+
 pub async fn config(pve: &impl Pve, node: &str, id: u32) -> Result<Value, String> {
     pve.get(&format!("/nodes/{node}/lxc/{id}/config"), &[])
         .await
@@ -148,7 +182,7 @@ pub async fn replace(pve: &impl Pve, spec: &NewContainer<'_>, say: &(impl Fn(&st
     let id = spec.ctid;
     let mut original = config(pve, node, id).await?;
     let devices = hs_deploy::devices::read(&original)?;
-    let home = text(&original, "mp0").to_owned();
+    let mounts = persistent_mounts(&original, id)?;
     if text(&original, "description").trim_end() == spec.description.trim_end() && old_root(&original)?.is_none() {
         return Ok(());
     }
@@ -344,7 +378,7 @@ pub async fn replace(pve: &impl Pve, spec: &NewContainer<'_>, say: &(impl Fn(&st
         original = config(pve, node, id).await?;
     }
     if hs_deploy::devices::read(&original)? != devices
-        || text(&original, "mp0") != home
+        || persistent_mounts(&original, id)? != mounts
         || volume(text(&original, "rootfs")) == volume(&old)
     {
         return Err("Root image verification failed; previous root and staging retained".into());
@@ -375,7 +409,7 @@ pub async fn replace(pve: &impl Pve, spec: &NewContainer<'_>, say: &(impl Fn(&st
     super::update::wait_task(pve, &upid, "remove root image staging container").await?;
     put(pve, node, id, &original, &[("description", &spec.description)]).await?;
     say(&format!(
-        "  CT {id}: root image replaced; persistent volume, device mappings and container identity retained"
+        "  CT {id}: root image replaced; all persistent mounts, device mappings and container identity retained"
     ));
     Ok(())
 }
