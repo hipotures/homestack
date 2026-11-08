@@ -374,7 +374,6 @@ pub async fn plan(
         plan.problems.push(error);
     }
     if source.manifest.schema3.is_some() {
-        plan.lines.push("Image replacement discards all rootfs-local application data, including any unsent exporter queue. Ordinary CT restarts preserve it.".into());
         for target in &plan.targets {
             if plan
                 .reviewed
