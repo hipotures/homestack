@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicU8, Ordering},
     },
     time::Duration,
 };
@@ -18,11 +18,15 @@ pub struct Notification {
     pub next_attempt: i64,
 }
 
+const PENDING: u8 = 0;
+const VERIFIED: u8 = 1;
+const FAILED: u8 = 2;
+
 pub struct Telegram {
     client: reqwest::Client,
     url: String,
     chat: String,
-    verified: AtomicBool,
+    state: AtomicU8,
 }
 impl Telegram {
     pub fn from_env() -> Result<Option<Self>> {
@@ -61,17 +65,23 @@ impl Telegram {
             client,
             url: format!("https://api.telegram.org/bot{token}/sendMessage"),
             chat,
-            verified: AtomicBool::new(false),
+            state: AtomicU8::new(PENDING),
         }))
     }
 
-    pub fn verified(&self) -> bool {
-        self.verified.load(Ordering::Relaxed)
+    /// Result of the last completed delivery: `pending`, `verified` or `failed`.
+    pub fn status(&self) -> &'static str {
+        match self.state.load(Ordering::Relaxed) {
+            VERIFIED => "verified",
+            FAILED => "failed",
+            _ => "pending",
+        }
     }
 
     async fn send(&self, text: &str) -> std::result::Result<(), DeliveryError> {
         let result = self.send_message(text).await;
-        self.verified.store(result.is_ok(), Ordering::Relaxed);
+        self.state
+            .store(if result.is_ok() { VERIFIED } else { FAILED }, Ordering::Relaxed);
         result
     }
 

@@ -516,12 +516,13 @@ the service; correct its environment and restart to retry that configuration.
 A lost acknowledgement can duplicate a startup message on retry, as with
 ordinary notifications.
 
-The header replaces the subscription subtitle with a green check and Telegram
-logo only after verification. It starts hidden, disappears after a delivery
-failure or loss of the browser's service connection, and returns after a
-successful delivery. `GET /api/v1/notifications/telegram` returns only
-`{"verified":true}` or `{"verified":false}`; credentials and chat identifiers
-are never returned.
-This indicator reflects the last completed delivery attempt, not a continuous
-connectivity probe. The SVG is Telegram's official logo from
-https://telegram.org/tour/screenshots, served locally without external requests.
+The header shows the Telegram logo in one of three colors: blue after a
+successful delivery, gray when notifications are not configured, and red when
+the optional configuration is invalid or the last delivery attempt failed. The
+logo stays hidden until the first startup message completes and while the
+browser has lost its service connection. `GET /api/v1/notifications/telegram`
+returns only `{"status":"pending"|"verified"|"disabled"|"failed"}`; credentials
+and chat identifiers are never returned. This indicator reflects the last
+completed delivery attempt, not a continuous connectivity probe. The logo is
+Telegram's official mark from https://telegram.org/tour/screenshots, inlined in
+the page without external requests.

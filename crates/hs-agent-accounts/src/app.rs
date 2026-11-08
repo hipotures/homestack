@@ -32,10 +32,18 @@ pub struct Context {
     pub heartbeat: Mutex<(Instant, u64)>,
     pub shutdown: CancellationToken,
     pub telegram: Option<crate::telegram::Telegram>,
+    pub telegram_misconfigured: bool,
 }
 impl Context {
     pub fn open(root: PathBuf, interval: u64, concurrency: usize, heartbeat_seconds: u64) -> Result<Arc<Self>> {
         process::directory(&root)?;
+        let (telegram, telegram_misconfigured) = match crate::telegram::Telegram::from_env() {
+            Ok(telegram) => (telegram, false),
+            Err(error) => {
+                eprintln!("Telegram notifications disabled: {}", error.message);
+                (None, true)
+            }
+        };
         let canonical = root
             .canonicalize()
             .map_err(|_| Failure::new("storage_failure", "Cannot resolve persistent storage"))?;
@@ -100,10 +108,8 @@ impl Context {
             heartbeat_seconds,
             heartbeat: Mutex::new((Instant::now(), 0)),
             shutdown: CancellationToken::new(),
-            telegram: crate::telegram::Telegram::from_env().unwrap_or_else(|error| {
-                eprintln!("Telegram notifications disabled: {}", error.message);
-                None
-            }),
+            telegram,
+            telegram_misconfigured,
         });
         for provider in &ctx.providers {
             ctx.seed(provider.id())?;

@@ -291,6 +291,18 @@ $('#theme').onclick = () => {
 theme();
 const pageVersion = document.querySelector('meta[name="agent-accounts-version"]').content;
 let providersLoaded = false, disconnected = false, polling = false, pollTimer = null, retryDelay = 2000;
+const telegramLabels = {
+  verified: 'Telegram notifications verified by a successful message',
+  disabled: 'Telegram notifications are not configured',
+  failed: 'Telegram notifications failed: invalid configuration or the last message was not delivered',
+};
+function showTelegram(status) {
+  const el = $('#telegram-status');
+  el.hidden = !(status in telegramLabels);
+  el.dataset.status = status;
+  el.title = telegramLabels[status] ?? '';
+  el.setAttribute('aria-label', el.title);
+}
 // One poll cycle: reload the page after a server upgrade, otherwise refresh the data.
 async function poll() {
   if (polling) return;
@@ -298,8 +310,7 @@ async function poll() {
   try {
     const { version } = await api('/version');
     if (version !== pageVersion) { location.reload(); return; }
-    const telegram = await api('/notifications/telegram');
-    $('#telegram-status').hidden = telegram.verified !== true;
+    showTelegram((await api('/notifications/telegram')).status);
     if (!providersLoaded) {
       for (const provider of await api('/providers')) {
         providerCapabilities.set(provider.id, provider.capabilities);
@@ -312,7 +323,7 @@ async function poll() {
     retryDelay = 2000;
     pollTimer = setTimeout(poll, 15000);
   } catch {
-    $('#telegram-status').hidden = true;
+    showTelegram('pending');
     disconnected = true;
     $('#notice').textContent = 'Connection to the service lost. Reconnecting…';
     pollTimer = setTimeout(poll, retryDelay);
