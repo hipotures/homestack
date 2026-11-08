@@ -28,6 +28,10 @@ pub trait Provider: Send + Sync {
     fn statistics<'a>(&'a self, _ctx: &'a Context, _p: &'a Profile) -> ProbeFuture<'a, Value> {
         Box::pin(async { Err(Failure::unsupported()) })
     }
+    /// Sends one minimal model request so the provider opens its subscription usage windows.
+    fn start_window<'a>(&'a self, _ctx: &'a Context, _p: &'a Profile, _binary: &'a Path) -> ProbeFuture<'a, Value> {
+        Box::pin(async { Err(Failure::unsupported()) })
+    }
     fn description(&self) -> Value {
         let capabilities = self.capabilities();
         json!({"id":self.id(),"capabilities":capabilities,"scopes":["account"]})

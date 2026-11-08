@@ -54,6 +54,45 @@ fn window(id: &str, label: &str, minutes: Option<i64>, v: &Value, model: Option<
         exhausted: None,
     }
 }
+/// Runs one SDK helper request: `usage` reads quota windows without a model turn, `start` sends one minimal turn.
+async fn helper(ctx: &Context, p: &Profile, binary: &Path, mode: &str) -> Result<Value> {
+    let root = process::prepare(&ctx.root, &p.id)?;
+    let mut command = process::command(Path::new("/usr/bin/node"), &root, "claude");
+    command.arg(
+        std::env::var("AGENT_ACCOUNTS_CLAUDE_HELPER")
+            .unwrap_or_else(|_| "/opt/agent-accounts/claude-probe/probe.mjs".into()),
+    );
+    let mut child = Process::spawn(command)?;
+    let request = uuid::Uuid::new_v4().to_string();
+    let result = async {
+        child
+            .send(&json!({"version":1,"id":request,"binary":binary,"mode":mode}))
+            .await?;
+        let result = child.read().await?;
+        if result["version"] != 1 || result["id"] != request {
+            return Err(Failure::new("protocol_failure", "Claude helper protocol mismatch"));
+        }
+        if result["ok"] != true {
+            let code = match result["error"]["code"].as_str() {
+                Some("reauthentication_required") => "reauthentication_required",
+                Some("unsupported_capability") => "unsupported_capability",
+                Some("network_failure") => "network_failure",
+                Some("probe_timeout") => "probe_timeout",
+                _ => "provider_api_failure",
+            };
+            let message = if mode == "start" {
+                "Claude could not start the usage window"
+            } else {
+                "Claude SDK usage probe could not complete"
+            };
+            return Err(Failure::new(code, message));
+        }
+        Ok(result)
+    }
+    .await;
+    child.finish().await;
+    result
+}
 impl Provider for Claude {
     fn bundled_version(&self) -> Option<&'static str> {
         Some("2.1.318")
@@ -63,6 +102,7 @@ impl Provider for Claude {
             "authentication",
             "account_information",
             "subscription_limits",
+            "start_window",
             "runtime_version",
             "runtime_updates",
         ]
@@ -74,30 +114,8 @@ impl Provider for Claude {
         Box::pin(async move {
             let binary = binary.ok_or_else(|| Failure::new("runtime_failure", "Managed runtime is unavailable"))?;
             let mut account = identity(ctx, p, binary).await?;
-            let root = process::prepare(&ctx.root, &p.id)?;
-            let mut command = process::command(Path::new("/usr/bin/node"), &root, "claude");
-            command.arg(
-                std::env::var("AGENT_ACCOUNTS_CLAUDE_HELPER")
-                    .unwrap_or_else(|_| "/opt/agent-accounts/claude-probe/probe.mjs".into()),
-            );
-            let mut child = Process::spawn(command)?;
-            let request = uuid::Uuid::new_v4().to_string();
-            let result = async {
-                child.send(&json!({"version":1,"id":request,"binary":binary})).await?;
-                let result = child.read().await?;
-                if result["version"] != 1 || result["id"] != request {
-                    return Err(Failure::new("protocol_failure", "Claude helper protocol mismatch"));
-                }
-                if result["ok"] != true {
-                    let code = match result["error"]["code"].as_str() {
-                        Some("reauthentication_required") => "reauthentication_required",
-                        Some("unsupported_capability") => "unsupported_capability",
-                        Some("network_failure") => "network_failure",
-                        Some("probe_timeout") => "probe_timeout",
-                        _ => "provider_api_failure",
-                    };
-                    return Err(Failure::new(code, "Claude SDK usage probe could not complete"));
-                }
+            let result = helper(ctx, p, binary, "usage").await?;
+            {
                 let data = &result["data"];
                 if data["rate_limits_available"] != true {
                     return Err(Failure::new(
@@ -178,9 +196,12 @@ impl Provider for Claude {
                     reset_credits: None,
                 })
             }
-            .await;
-            child.finish().await;
-            result
+        })
+    }
+    fn start_window<'a>(&'a self, ctx: &'a Context, p: &'a Profile, binary: &'a Path) -> ProbeFuture<'a, Value> {
+        Box::pin(async move {
+            identity(ctx, p, binary).await?;
+            Ok(helper(ctx, p, binary, "start").await?["data"].take())
         })
     }
     fn authenticate<'a>(

@@ -31,6 +31,11 @@ p { margin: 0; }
 .bar { height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; }
 .bar > span { display: block; height: 100%; background: var(--agent, var(--heat)); border-radius: 3px; }
 .meta { font-size: var(--fs-small); color: var(--faint); }
+.reset-line { display: flex; align-items: center; gap: 6px; min-height: 22px; }
+button.icon { min-height: 22px; height: 22px; padding: 0 7px; border-color: var(--border); color: var(--muted); display: inline-flex; align-items: center; }
+button.icon:hover:not(:disabled) { color: var(--agent, var(--text)); border-color: var(--agent, var(--border-strong)); background: transparent; }
+button.icon.busy svg { display: none; }
+button.icon.busy::after { margin-left: 0; }
 .warn { font-size: var(--fs-small); color: var(--warn); }
 
 /* controls */

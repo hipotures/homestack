@@ -5,10 +5,84 @@ use crate::{
 };
 use serde_json::json;
 pub struct Codex;
+// Features and context sources that would add tools, skills or instructions to a model request.
+const THIN: &[&str] = &[
+    "--disable",
+    "apps",
+    "--disable",
+    "browser_use",
+    "--disable",
+    "browser_use_external",
+    "--disable",
+    "browser_use_full_cdp_access",
+    "--disable",
+    "computer_use",
+    "--disable",
+    "in_app_browser",
+    "--disable",
+    "image_generation",
+    "--disable",
+    "multi_agent",
+    "--disable",
+    "multi_agent_v2",
+    "--disable",
+    "collaboration_modes",
+    "--disable",
+    "plugins",
+    "--disable",
+    "remote_plugin",
+    "--disable",
+    "plugin_sharing",
+    "--disable",
+    "skill_search",
+    "--disable",
+    "skill_mcp_dependency_install",
+    "--enable",
+    "omit_skill_descriptions",
+    "--enable",
+    "skip_host_skill_discovery",
+    "--disable",
+    "shell_tool",
+    "--disable",
+    "shell_snapshot",
+    "--disable",
+    "unified_exec",
+    "--disable",
+    "code_mode_host",
+    "--disable",
+    "code_mode_interrupt",
+    "--disable",
+    "incremental_tools",
+    "--disable",
+    "sleep_tool",
+    "--disable",
+    "view_image",
+    "--disable",
+    "goals",
+    "--disable",
+    "hooks",
+    "--disable",
+    "memories",
+    "--disable",
+    "tool_suggest",
+    "--disable",
+    "workspace_dependencies",
+    "-c",
+    "project_doc_max_bytes=0",
+    "-c",
+    "project_doc_fallback_filenames=[]",
+    "-c",
+    "web_search=\"disabled\"",
+    "-c",
+    "mcp_servers={}",
+];
 async fn start(ctx: &Context, p: &Profile, binary: &Path) -> Result<Process> {
+    spawn(ctx, p, binary, &[]).await
+}
+async fn spawn(ctx: &Context, p: &Profile, binary: &Path, options: &[&str]) -> Result<Process> {
     let path = process::prepare(&ctx.root, &p.id)?;
     let mut command = process::command(binary, &path, "codex");
-    command.arg("app-server").arg("--listen").arg("stdio://");
+    command.arg("app-server").args(options).arg("--listen").arg("stdio://");
     let mut child = Process::spawn(command)?;
     child.rpc("initialize",json!({"clientInfo":{"name":"agent_accounts","title":"Agent Accounts","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}})).await?;
     child.send(&json!({"method":"initialized"})).await?;
@@ -46,6 +120,7 @@ impl Provider for Codex {
             "account_information",
             "subscription_limits",
             "account_statistics",
+            "start_window",
             "runtime_version",
             "runtime_updates",
         ]
@@ -156,6 +231,78 @@ impl Provider for Codex {
                     }
                 }
                 account(&child.rpc("account/read", json!({"refreshToken":false})).await?)
+            }
+            .await;
+            child.finish().await;
+            result
+        })
+    }
+    fn start_window<'a>(&'a self, ctx: &'a Context, p: &'a Profile, binary: &'a Path) -> ProbeFuture<'a, Value> {
+        Box::pin(async move {
+            let mut child = spawn(ctx, p, binary, THIN).await?;
+            let result = async {
+                let models = child.rpc("model/list", json!({})).await?;
+                // The cheapest model family keeps the request small; fall back to the account default.
+                let model = models["data"]
+                    .as_array()
+                    .and_then(|all| all.iter().filter_map(|m| m["id"].as_str()).find(|id| id.ends_with("-luna")))
+                    .map(str::to_owned);
+                let work = process::profile_dir(&ctx.root, &p.id)?.join("work");
+                let thread = child
+                    .rpc(
+                        "thread/start",
+                        json!({"model":model,"cwd":work,"sandbox":"read-only","approvalPolicy":"never","ephemeral":true,
+                            "baseInstructions":"Reply with one word.","developerInstructions":"","personality":"none",
+                            "environments":[],"dynamicTools":[],"selectedCapabilityRoots":[],"runtimeWorkspaceRoots":[]}),
+                    )
+                    .await?;
+                let thread = thread["thread"]["id"]
+                    .as_str()
+                    .ok_or_else(|| Failure::new("protocol_failure", "Codex did not return a thread ID"))?
+                    .to_owned();
+                child
+                    .rpc(
+                        "turn/start",
+                        json!({"threadId":thread,"input":[{"type":"text","text":"hi"}],"effort":"low",
+                            "environments":[],"runtimeWorkspaceRoots":[]}),
+                    )
+                    .await?;
+                let mut tokens = Value::Null;
+                loop {
+                    let event = child.read().await?;
+                    if let (Some(id), Some(_)) = (event.get("id"), event["method"].as_str()) {
+                        child
+                            .send(&json!({"id":id,"error":{"code":-32601,"message":"Unsupported request"}}))
+                            .await?;
+                        continue;
+                    }
+                    match event["method"].as_str() {
+                        Some("thread/tokenUsage/updated") => tokens = event["params"]["tokenUsage"]["last"].clone(),
+                        Some("turn/completed") => {
+                            if event["params"]["turn"]["status"] != "completed" {
+                                return Err(Failure::new(
+                                    "provider_api_failure",
+                                    "Codex could not start the usage window",
+                                ));
+                            }
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                if tokens.is_null() {
+                    // Usage may follow completion; wait briefly without failing the started window.
+                    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                        while let Ok(event) = child.read().await {
+                            if event["method"] == "thread/tokenUsage/updated" {
+                                tokens = event["params"]["tokenUsage"]["last"].clone();
+                                break;
+                            }
+                        }
+                    })
+                    .await;
+                }
+                Ok(json!({"model":model,"tokens":tokens}))
             }
             .await;
             child.finish().await;

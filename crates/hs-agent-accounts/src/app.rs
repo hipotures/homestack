@@ -323,7 +323,12 @@ impl Context {
         let provider_id = p.provider.clone();
         tokio::spawn(async move {
             // Keep the code receiver owned by the selected operation, never by a global terminal.
-            let result = process::bounded(&cancel, if kind == "authentication" { 600 } else { 90 }, async {
+            let limit = match kind.as_str() {
+                "authentication" => 600,
+                "start_window" => 150,
+                _ => 90,
+            };
+            let result = process::bounded(&cancel, limit, async {
                 let gate = ctx.gates.get(&provider_id).cloned().ok_or_else(Failure::unsupported)?;
                 let _provider_guard = gate.read().await;
                 let lock = ctx.lock(&profile);
@@ -370,6 +375,17 @@ impl Context {
                         .runtime(&p.provider)?
                         .map(|_| ctx.binary(&p.provider))
                         .transpose()?;
+                    if kind == "start_window" {
+                        let runtime = binary
+                            .as_deref()
+                            .ok_or_else(|| Failure::new("runtime_failure", "Managed runtime is unavailable"))?;
+                        ctx.update_operation(&id, |o| o.message = "Sending a minimal request".into());
+                        let sent = process::bounded(&cancel, 60, provider.start_window(&ctx, &p, runtime)).await?;
+                        ctx.update_operation(&id, |o| {
+                            o.message = "Checking usage".into();
+                            o.result = Some(sent);
+                        });
+                    }
                     let started = Instant::now();
                     let result = process::bounded(&cancel, 60, async {
                         let first = provider.probe(&ctx, &p, binary.as_deref()).await;

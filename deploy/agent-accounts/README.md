@@ -82,10 +82,20 @@ reconstructed from this monitoring process. Missing values remain unknown;
 failed probes preserve the previous successful snapshot as stale. A reset time
 passing never implies zero usage or restored availability.
 
+A usage window that has not started (zero usage with no reset time, or a reset
+always one full window away) shows a start control. POST `profiles/<id>/window`
+sends one minimal model turn so the provider starts counting its windows, then
+checks usage. Claude uses the SDK helper with the Haiku alias, a one-line system
+prompt, no tools, settings, hooks or MCP, and thinking disabled (about 1.3k
+input tokens). Codex starts an ephemeral app-server thread with replaced base
+instructions, the cheapest listed `*-luna` model, low effort, and tools, skills,
+plugins, multi-agent features, project documents and MCP disabled (about 4.7k
+input tokens, mostly cached). Platform sandbox and environment wrappers remain.
+
 REST resources are under `/api/v1`: `providers`, `profiles`, `runtimes`,
 `operations`, and `health`. Profile subresources include `authentication`,
-`limits`, `history` (latest 100 stored snapshots), and `statistics`.
-POST authentication/limits/statistics returns an operation ID. Unsupported
+`limits`, `history` (latest 100 stored snapshots), `statistics` and `window`.
+POST authentication/limits/statistics/window returns an operation ID. Unsupported
 provider statistics return an explicit unsupported-capability operation error. Read
 `operations/<id>` or subscribe to `operations/<id>/events` for progress.
 Active operations are in-memory. Sanitized terminal summaries and runtime

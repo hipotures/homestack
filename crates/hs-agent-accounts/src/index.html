@@ -42,6 +42,12 @@
   <form id="code-form" hidden><label>Authorization code<input id="auth-code" autocomplete="off" maxlength="4096"></label><button class="primary">Submit code</button></form>
   <footer><button id="cancel-operation" type="button">Cancel operation</button><button type="button" data-close>Close</button></footer>
 </dialog>
+<dialog id="start-dialog"><form method="dialog">
+  <h2 id="start-title">Start window?</h2>
+  <p>Sends one minimal request with no tools or project context, so the provider starts counting this window now.</p>
+  <p>The new window resets at <strong id="start-reset" class="num"></strong>.</p>
+  <footer><button value="cancel">Cancel</button><button value="start" class="primary">Start</button></footer>
+</form></dialog>
 <dialog id="details" class="wide">
   <h2>Account details</h2>
   <div id="detail-content"></div>

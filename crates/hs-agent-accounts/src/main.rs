@@ -148,6 +148,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/profiles/{id}/limits", get(limits).post(probe))
         .route("/api/v1/profiles/{id}/history", get(history))
         .route("/api/v1/profiles/{id}/statistics", post(statistics))
+        .route("/api/v1/profiles/{id}/window", post(start_window))
         .route("/api/v1/runtimes", get(runtimes))
         .route("/api/v1/runtimes/{provider}/check", post(check_runtime))
         .route("/api/v1/runtimes/{provider}/upgrade", post(upgrade_runtime))
@@ -371,6 +372,19 @@ async fn limits(State(c): State<Arc<Context>>, Path(id): Path<String>) -> Result
 async fn history(State(c): State<Arc<Context>>, Path(id): Path<String>) -> Result<Json<Vec<Snapshot>>> {
     c.db.profile(&id)?;
     Ok(Json(c.db.history(&id)?))
+}
+async fn start_window(State(c): State<Arc<Context>>, Path(id): Path<String>) -> Result<(StatusCode, Json<Operation>)> {
+    let p = c.db.profile(&id)?;
+    if !p.enabled {
+        return Err(Failure::new(
+            "disabled",
+            "Enable the profile before starting a usage window",
+        ));
+    }
+    if !c.provider(&p.provider)?.capabilities().contains(&"start_window") {
+        return Err(Failure::unsupported());
+    }
+    Ok(accepted(c.begin(&p, "start_window")?))
 }
 async fn statistics(State(c): State<Arc<Context>>, Path(id): Path<String>) -> Result<(StatusCode, Json<Operation>)> {
     let p = c.db.profile(&id)?;

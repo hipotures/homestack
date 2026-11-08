@@ -66,6 +66,36 @@ function label(limit, provider) {
   const name = limit.label && limit.label !== duration && limit.label.toLowerCase() !== provider ? limit.label : '';
   return [duration, name].filter(Boolean).join(' · ') || limit.id;
 }
+// A window whose reset is unknown, or always a full window away, has not started: usage begins the clock.
+function notStarted(limit, observed) {
+  if (limit.used_percent !== 0 || !limit.window_minutes) return false;
+  return !limit.resets_at || limit.resets_at - observed >= limit.window_minutes * 60 - 120;
+}
+const playIcon = '<svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><path d="M2 1l7 4-7 4z" fill="currentColor"/></svg>';
+function resetLine(profile, limit) {
+  const line = node('div', undefined, 'reset-line');
+  const canStart = providerCapabilities.get(profile.provider)?.includes('start_window');
+  if (canStart && notStarted(limit, profile.snapshot.observed_at)) {
+    line.append(node('span', 'Not started', 'meta'));
+    const name = label(limit, profile.provider);
+    const start = button(line, '', () => backgroundOperation(`/profiles/${profile.id}/window`, {}, profile.id), `window:${profile.id}`, !profile.enabled);
+    const run = start.onclick;
+    start.onclick = async () => { if (await confirmStart(name, limit.window_minutes)) await run(); };
+    start.classList.add('icon');
+    start.insertAdjacentHTML('afterbegin', playIcon);
+    start.title = `Start ${name} window`;
+    start.setAttribute('aria-label', start.title);
+  } else line.append(node('span', limit.resets_at ? 'Resets ' + time(limit.resets_at) : 'Reset time unknown', 'meta'));
+  return line;
+}
+function confirmStart(name, minutes) {
+  const dialog = $('#start-dialog');
+  setText($('#start-title'), `Start ${name} window?`);
+  setText($('#start-reset'), time(Math.floor(Date.now() / 1000) + minutes * 60));
+  dialog.returnValue = '';
+  dialog.showModal();
+  return new Promise(resolve => dialog.addEventListener('close', () => resolve(dialog.returnValue === 'start'), { once: true }));
+}
 async function details(profile) {
   const content = $('#detail-content');
   content.replaceChildren();
@@ -144,7 +174,7 @@ async function refresh() {
           const bar = node('div', undefined, 'bar'), fill = node('span');
           fill.style.width = `${Math.min(100, limit.used_percent)}%`; bar.append(fill); quota.append(bar);
         }
-        quota.append(node('span', 'Resets ' + time(limit.resets_at), 'meta'));
+        quota.append(resetLine(profile, limit));
         quota.append(node('span', limit.exhausted ? 'Provider reports an exhausted limit' : '', 'warn slot'));
         quotas.append(quota);
       }
@@ -225,7 +255,7 @@ async function backgroundOperation(path, body, profileId) {
 }
 function showOperation(operation) {
   selectedOperation = operation;
-  $('#operation h2').textContent = ({ authentication: 'Authentication', probe: 'Usage check', upgrade: 'Runtime upgrade', update_check: 'Available runtime version', statistics: 'Account statistics' })[operation.kind] || 'Operation';
+  $('#operation h2').textContent = ({ authentication: 'Authentication', probe: 'Usage check', upgrade: 'Runtime upgrade', update_check: 'Available runtime version', statistics: 'Account statistics', start_window: 'Start usage window' })[operation.kind] || 'Operation';
   if (!$('#operation').open) $('#operation').showModal();
   source?.close(); updateOperation(operation);
   if (!operation.finished_at) {
