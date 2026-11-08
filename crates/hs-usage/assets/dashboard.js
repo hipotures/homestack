@@ -198,7 +198,7 @@
     w.tableHost.replaceChildren(table);
   }
   // ---- Overview (main view). Values are backend totals; the browser only lays them out. ----
-  const F=AIUsage.fmt, css=name=>`var(${name})`;
+  const F=AIUsage.fmt, css=name=>getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   const esc=v=>String(v).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c]);
   const two=n=>String(n).padStart(2,"0");
   const chosen=()=>Object.keys(agents).filter(a=>selection.agent==="all"||selection.agent===a);
