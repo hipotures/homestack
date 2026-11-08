@@ -282,15 +282,17 @@
       const who=`${agents[w.agent]}${w.group?" · "+w.group:""}`;
       const resets=new Map(history.reset_timestamp_seconds||[]),used=new Map(history.used_percent||[]),exhausted=new Map(history.exhausted||[]);
       if(enabledEvents){
-        let wasFull=false,previous=0,previousReset=null;
+        let wasFull=false,previousReset=null;
         for(const t of [...new Set([...used.keys(),...exhausted.keys()])].sort((a,b)=>a-b)){
           const full=(used.get(t)??0)>=100||exhausted.get(t)===1,reset=resets.get(t);
-          if(full&&(!wasFull||(reset!=null&&previousReset!=null&&reset!==previousReset)||t-previous>(dataset?.details?.sample_step||300)*1.5)&&t>=range.start&&t<=range.end){
+          // Reset corrections and gaps in telemetry do not start another exhaustion episode.
+          const newWindow=reset!=null&&previousReset!=null&&t>=previousReset&&reset>previousReset;
+          if(full&&(!wasFull||newWindow)&&t>=range.start&&t<=range.end){
             const minutes=minutesAt(t),duration=minutes>0?(minutes%1440===0?`${minutes/1440}-day`:minutes%60===0?`${minutes/60}-hour`:`${minutes}-minute`):"";
             const kind=[duration,w.label!==duration&&w.label?.toLowerCase()!==w.agent?w.label:""].filter(Boolean).join(" · ")||w.window;
             events.push({xAxis:t*1000,name:`${who} · ${kind} · limit exhausted (observed)`,label:{formatter:`${agents[w.agent]} · ${kind}`},lineStyle:{color:AIUsage.colorFor(agents[w.agent])}});
           }
-          wasFull=full;previous=t;previousReset=reset;
+          wasFull=full;previousReset=reset??previousReset;
         }
       }
       if(enabledPeriods){
