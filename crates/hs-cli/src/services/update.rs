@@ -417,6 +417,13 @@ pub async fn plan(
                 continue;
             }
         };
+        let environment = match environment_changes(&plan, source, target).await {
+            Ok(lines) => lines,
+            Err(error) => {
+                plan.problems.push(error);
+                Vec::new()
+            }
+        };
         let current = target.image.rsplit_once(':').map_or("unknown", |(_, v)| v);
         let state = if target.running { "running" } else { "stopped" };
         plan.lines.extend([
@@ -432,6 +439,12 @@ pub async fn plan(
                 node::show_size(target.root_mib),
                 target.root_storage
             ),
+        ]);
+        for (index, change) in environment.iter().enumerate() {
+            let label = if index == 0 { "Variables" } else { "" };
+            plan.lines.push(format!("  {label:<11}{change}"));
+        }
+        plan.lines.extend([
             String::new(),
             "Preserved".to_owned(),
             format!("  Container  CT {}", target.ctid),
@@ -750,6 +763,61 @@ const REPLACEMENT_RUNNING: &str = "replacement-running ";
 const REPLACEMENT_ONBOOT: &str = "replacement-onboot ";
 const REPLACEMENT_PREVIOUS_IMAGE: &str = "replacement-previous-image ";
 const REPLACEMENT_PREVIOUS_DIGEST: &str = "replacement-previous-digest ";
+
+/// The old image's environment entries that give way to the new image's;
+/// application settings are always carried.
+async fn image_defaults(
+    plan: &Plan,
+    target: &Instance,
+    rollback: Option<&Rollback>,
+    application: &[(String, String)],
+) -> Result<Vec<(String, String)>, String> {
+    let (image, digest) = rollback.map_or((&plan.image, &plan.digest), |previous| {
+        (&previous.image, &previous.digest)
+    });
+    let mut defaults = image_environment(image, digest, target.ctid).await?;
+    defaults.retain(|(key, _)| !application.iter().any(|entry| entry.0 == *key));
+    Ok(defaults)
+}
+
+async fn image_environment(image: &str, digest: &str, ctid: u32) -> Result<Vec<(String, String)>, String> {
+    let entries = hs_core::registry::environment(image, digest)
+        .await
+        .map_err(|e| format!("CT {ctid}: {image} environment: {e}"))?;
+    Ok(node::parse_env(&entries.join("\0")))
+}
+
+/// The image-declared variables the update changes, adds or removes, as
+/// `apply` computes them. Application configuration is listed separately.
+async fn environment_changes(plan: &Plan, source: &Source, target: &Instance) -> Result<Vec<String>, String> {
+    let Some(reviewed) = plan.reviewed.get(&target.ctid) else {
+        return Ok(Vec::new());
+    };
+    let application = if source.manifest.schema3.is_some() {
+        application_environment(&plan.selection_root, source, target)?
+    } else {
+        Vec::new()
+    };
+    let rollback = previous_release(target, reviewed.recovery_operation.is_some())?
+        .filter(|previous| previous.image != plan.image || previous.digest != plan.digest);
+    let defaults = image_defaults(plan, target, rollback.as_ref(), &application).await?;
+    let new_image = image_environment(&plan.image, &plan.digest, target.ctid).await?;
+    let old = node::parse_env(&node::merge_env(&target.environment, &application, &[]));
+    let after = node::parse_env(&node::carried_env(&new_image, &old, &defaults));
+    let applied = |key: &str| application.iter().any(|entry| entry.0 == key);
+    let mut changes = Vec::new();
+    for (key, value) in after.iter().filter(|(key, _)| !applied(key)) {
+        match old.iter().find(|entry| entry.0 == *key) {
+            Some((_, previous)) if previous == value => {}
+            Some((_, previous)) => changes.push(format!("{key} {previous} → {value}")),
+            None => changes.push(format!("{key}={value} (new)")),
+        }
+    }
+    for (key, _) in old.iter().filter(|(key, _)| !after.iter().any(|entry| entry.0 == *key)) {
+        changes.push(format!("{key} removed"));
+    }
+    Ok(changes)
+}
 
 fn previous_release(target: &Instance, resuming: bool) -> Result<Option<Rollback>, String> {
     if !resuming {
@@ -1184,18 +1252,7 @@ async fn one(
     same_mount(source, target)?;
     let rollback = previous_release(target, reviewed.recovery_operation.is_some())?
         .filter(|previous| previous.image != plan.image || previous.digest != plan.digest);
-    // The old image's defaults give way to the new image's; application
-    // settings are always carried.
-    let (old_image, old_digest) = rollback.as_ref().map_or((&plan.image, &plan.digest), |previous| {
-        (&previous.image, &previous.digest)
-    });
-    let mut defaults = node::parse_env(
-        &hs_core::registry::environment(old_image, old_digest)
-            .await
-            .map_err(|e| format!("CT {ctid}: previous image environment: {e}"))?
-            .join("\0"),
-    );
-    defaults.retain(|(key, _)| !application.iter().any(|entry| entry.0 == *key));
+    let defaults = image_defaults(plan, target, rollback.as_ref(), &application).await?;
     // Every read/authorization check precedes the first environment or PVE write.
     if !target.held
         && (reviewed.pending_environment || application.iter().any(|entry| !target.environment.contains(entry)))
