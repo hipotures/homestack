@@ -220,6 +220,7 @@ impl Context {
             failures: 0,
             total_failures: 0,
             probe_duration_seconds: None,
+            window_started_at: None,
             snapshot: None,
             notifications: Vec::new(),
             created_at: now(),
@@ -381,6 +382,7 @@ impl Context {
                             .ok_or_else(|| Failure::new("runtime_failure", "Managed runtime is unavailable"))?;
                         ctx.update_operation(&id, |o| o.message = "Sending a minimal request".into());
                         let sent = process::bounded(&cancel, 60, provider.start_window(&ctx, &p, runtime)).await?;
+                        p.window_started_at = Some(now());
                         ctx.update_operation(&id, |o| {
                             o.message = "Checking usage".into();
                             o.result = Some(sent);

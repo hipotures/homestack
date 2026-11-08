@@ -67,15 +67,18 @@ function label(limit, provider) {
   return [duration, name].filter(Boolean).join(' · ') || limit.id;
 }
 // A window whose reset is unknown, or always a full window away, has not started: usage begins the clock.
-function notStarted(limit, observed) {
+// A reset one window after a completed start request belongs to that freshly started window.
+function notStarted(limit, observed, started) {
   if (limit.used_percent !== 0 || !limit.window_minutes) return false;
-  return !limit.resets_at || limit.resets_at - observed >= limit.window_minutes * 60 - 120;
+  const span = limit.window_minutes * 60;
+  if (limit.resets_at && started && Math.abs(limit.resets_at - started - span) <= 120) return false;
+  return !limit.resets_at || limit.resets_at - observed >= span - 120;
 }
 const playIcon = '<svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><path d="M2 1l7 4-7 4z" fill="currentColor"/></svg>';
 function resetLine(profile, limit) {
   const line = node('div', undefined, 'reset-line');
   const canStart = providerCapabilities.get(profile.provider)?.includes('start_window');
-  if (canStart && notStarted(limit, profile.snapshot.observed_at)) {
+  if (canStart && notStarted(limit, profile.snapshot.observed_at, profile.window_started_at)) {
     line.append(node('span', 'Not started', 'meta'));
     const name = label(limit, profile.provider);
     const start = button(line, '', () => backgroundOperation(`/profiles/${profile.id}/window`, {}, profile.id), `window:${profile.id}`, !profile.enabled);

@@ -63,6 +63,9 @@ pub struct Profile {
     pub total_failures: u64,
     #[serde(default)]
     pub probe_duration_seconds: Option<f64>,
+    /// When a start_window request last completed; tells a just-started window from a not-started one.
+    #[serde(default)]
+    pub window_started_at: Option<i64>,
     pub snapshot: Option<Snapshot>,
     #[serde(default)]
     pub notifications: Vec<crate::telegram::Notification>,
