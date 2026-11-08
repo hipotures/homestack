@@ -472,7 +472,7 @@ pub async fn plan(
         if let Some(reviewed) = plan.reviewed.get(&target.ctid) {
             for (slot, mount) in &reviewed.mounts {
                 if slot != "mp0" {
-                    plan.lines.push(format!("  Mount {slot}  {mount} (preserved)"));
+                    plan.lines.push(format!("  Mount {slot}  {mount}"));
                 }
             }
         }
@@ -500,10 +500,10 @@ pub async fn plan(
         plan.lines
             .push(format!("Backup: stopped container and home → {}", plan.backup_storage));
     }
-    plan.lines.push(match &source.manifest.healthcheck {
-        None => "Health check: not provided by this service.".to_owned(),
-        Some(_) => "Health check: automatic after update.".to_owned(),
-    });
+    if source.manifest.healthcheck.is_none() {
+        plan.lines
+            .push("Health check: not provided by this service.".to_owned());
+    }
     plan
 }
 
