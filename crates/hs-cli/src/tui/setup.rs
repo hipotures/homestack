@@ -482,6 +482,10 @@ pub struct SetupBox {
     pub ssh_status: String,
     pub stage: Stage,
     pub details_scroll: usize,
+    /// Whether the details follow the highlighted section; scrolling them stops it.
+    pub details_follow: bool,
+    /// The first details row last drawn.
+    pub details_shown: std::cell::Cell<usize>,
     /// The sections of the highlighted manifest shown open.
     pub manifest_open: BTreeSet<String>,
     /// The highlighted section while its sections are browsed.
@@ -663,6 +667,8 @@ impl SetupBox {
             ssh_status: if connected { "connected" } else { "not connected" }.to_owned(),
             stage: Stage::Tree,
             details_scroll: 0,
+            details_follow: false,
+            details_shown: std::cell::Cell::new(0),
             manifest_open: BTreeSet::new(),
             manifest_focus: None,
             notice: None,
@@ -2469,6 +2475,7 @@ impl SetupBox {
             return;
         };
         self.manifest_focus = Some(index);
+        self.details_follow = true;
         if !self.manifest_open.remove(&name) {
             self.manifest_open.insert(name);
         }
@@ -2492,7 +2499,14 @@ impl SetupBox {
         }
         // The details follow the highlighted section.
         self.details_scroll = 0;
+        self.details_follow = true;
         Some(())
+    }
+
+    /// Scroll the details by `rows` from where they are shown.
+    pub fn scroll_details(&mut self, rows: isize) {
+        self.details_follow = false;
+        self.details_scroll = self.details_shown.get().saturating_add_signed(rows);
     }
 
     /// Move the Services highlight by `step` rows.
@@ -2596,8 +2610,8 @@ impl SetupBox {
             KeyCode::Down => self.move_service_cursor(1),
             KeyCode::Home => self.move_service_cursor(isize::MIN / 2),
             KeyCode::End => self.move_service_cursor(isize::MAX / 2),
-            KeyCode::PageUp => self.details_scroll = self.details_scroll.saturating_sub(10),
-            KeyCode::PageDown => self.details_scroll += 10,
+            KeyCode::PageUp => self.scroll_details(-10),
+            KeyCode::PageDown => self.scroll_details(10),
             KeyCode::Right | KeyCode::Tab => self.show_section(self.section + 1),
             KeyCode::Left | KeyCode::BackTab => self.show_section(self.section + self.groups().len() - 1),
             KeyCode::Char('f') => self.filtering = true,
@@ -2605,6 +2619,7 @@ impl SetupBox {
             KeyCode::Char(' ') if !self.manifest_sections().is_empty() => {
                 self.manifest_focus = Some(0);
                 self.details_scroll = 0;
+                self.details_follow = true;
             }
             KeyCode::Enter if row.as_ref().is_some_and(|row| row.file.is_some()) => return self.deploy(),
             KeyCode::Enter => return self.toggle_repository(),
@@ -2715,8 +2730,8 @@ impl SetupBox {
             KeyCode::Down => self.move_cursor(1),
             KeyCode::Home => self.move_cursor(isize::MIN / 2),
             KeyCode::End => self.move_cursor(isize::MAX / 2),
-            KeyCode::PageUp => self.details_scroll = self.details_scroll.saturating_sub(10),
-            KeyCode::PageDown => self.details_scroll += 10,
+            KeyCode::PageUp => self.scroll_details(-10),
+            KeyCode::PageDown => self.scroll_details(10),
             KeyCode::Right | KeyCode::Tab => self.show_section(self.section + 1),
             KeyCode::Left | KeyCode::BackTab => {
                 let count = self.groups().len().max(1);

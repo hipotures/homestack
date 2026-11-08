@@ -589,10 +589,13 @@ fn draw_details(
     let focused = setup.manifest_focus.and_then(|focus| heads.get(focus)).copied();
     let height = usize::from(area.height);
     let mut scroll = setup.details_scroll;
-    if let Some(row) = focused.and_then(first_row) {
+    if setup.details_follow
+        && let Some(row) = focused.and_then(first_row)
+    {
         scroll = scroll.clamp((row + 1).saturating_sub(height), row);
     }
     let scroll = scroll.min(lines.len().saturating_sub(height));
+    setup.details_shown.set(scroll);
     let status = details.first().and_then(|(line, _)| SetupBox::status_tone(line));
     for (row, (line, tone, at)) in lines.iter().enumerate().skip(scroll).take(height) {
         let y = area.y + u16::try_from(row - scroll).unwrap_or(0);

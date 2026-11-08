@@ -1569,6 +1569,7 @@ impl App {
             }
             Scrolls::SetupDetails => {
                 if let Some(setup) = self.setup.as_mut() {
+                    setup.details_follow = false;
                     setup.details_scroll = offset;
                 }
             }
@@ -1956,11 +1957,11 @@ impl App {
                     ) =>
             {
                 if let Some(setup) = self.setup.as_mut() {
-                    setup.details_scroll = if event.kind == MouseEventKind::ScrollDown {
-                        setup.details_scroll + 3
+                    setup.scroll_details(if event.kind == MouseEventKind::ScrollDown {
+                        3
                     } else {
-                        setup.details_scroll.saturating_sub(3)
-                    };
+                        -3
+                    });
                 }
                 None
             }
