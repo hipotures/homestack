@@ -222,7 +222,10 @@ async function refresh() {
   $('#runtimes').replaceChildren();
   for (const runtime of runtimes) {
     const row = node('article', undefined, `runtime provider-${runtime.provider}`), head = node('div', undefined, 'card-head');
-    head.append(node('h3', runtimeName(runtime.provider)), node('span', `${runtime.version} pinned · latest ${runtime.latest_version || 'not checked'}`, 'num sub'));
+    const versions = node('span', `${runtime.version} pinned · latest `, 'num sub');
+    const newer = runtime.latest_version && compareVersions(runtime.latest_version, runtime.version) > 0;
+    versions.append(node('span', runtime.latest_version || 'not checked', newer ? 'newer' : undefined));
+    head.append(node('h3', runtimeName(runtime.provider)), versions);
     row.append(head, node('span', `Version checked ${time(runtime.checked_at)} · usage verified ${time(runtime.verified_at)}`, 'meta'));
     if (runtime.previous_version) row.append(node('span', `Retained version: ${runtime.previous_version}`, 'meta'));
     if (runtime.last_result) row.append(node('p', runtime.last_result, runtime.last_error ? 'error' : 'meta'));
