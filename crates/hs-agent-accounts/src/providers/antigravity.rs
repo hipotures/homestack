@@ -2,9 +2,36 @@ use super::*;
 use crate::process::{self, Process};
 use tokio::io::AsyncWriteExt;
 pub struct Antigravity;
+/// The CLI keeps a log, a conversation database and a brain directory for
+/// every start and never removes them. Each run first clears what earlier runs
+/// left, so a profile holds only the last run's state and one overwritten log.
+const LOG: &str = "antigravity.log";
+const PER_RUN: [&str; 3] = ["log", "conversations", "brain"];
+fn command(binary: &Path, root: &Path) -> tokio::process::Command {
+    let state = root.join("home/.gemini/antigravity-cli");
+    for name in PER_RUN {
+        let Ok(entries) = std::fs::read_dir(state.join(name)) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let removed = if path.is_dir() {
+                std::fs::remove_dir_all(&path)
+            } else {
+                std::fs::remove_file(&path)
+            };
+            if let Err(error) = removed {
+                eprintln!("Cannot remove Antigravity {name} entry: {error}");
+            }
+        }
+    }
+    let mut command = process::command(binary, root, "antigravity");
+    command.arg("--log-file").arg(root.join(LOG));
+    command
+}
 async fn identity(ctx: &Context, p: &Profile, binary: &Path) -> Result<Account> {
     let root = process::prepare(&ctx.root, &p.id)?;
-    let mut command = process::command(binary, &root, "antigravity");
+    let mut command = command(binary, &root);
     command.arg("acp");
     let mut child = Process::spawn(command)?;
     let result = async {
@@ -45,7 +72,7 @@ impl Provider for Antigravity {
             let binary = binary.ok_or_else(|| Failure::new("runtime_failure", "Managed runtime is unavailable"))?;
             let account = identity(ctx, p, binary).await?;
             let root = process::prepare(&ctx.root, &p.id)?;
-            let mut command = process::command(binary, &root, "antigravity");
+            let mut command = command(binary, &root);
             command.args(["-p", "/usage", "--output-format", "json"]);
             let mut child = Process::spawn(command)?;
             let result = child.document().await;
