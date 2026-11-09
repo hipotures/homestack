@@ -182,6 +182,7 @@ pub async fn replace(
     pve: &impl Pve,
     spec: &NewContainer<'_>,
     defaults: &[(String, String)],
+    shutdown_seconds: u32,
     say: &(impl Fn(&str) + ?Sized),
 ) -> Result<(), String> {
     let node = spec.node;
@@ -316,11 +317,14 @@ pub async fn replace(
     let old = old_root(&original)?.ok_or("Previous root metadata missing")?.to_owned();
     temporary_fields(&original, id)?;
     if running(pve, node, id).await? {
-        say(&format!("  stopping CT {id} gracefully for root image switch"));
+        say(&format!(
+            "  stopping CT {id} gracefully for root image switch (up to {shutdown_seconds} s)"
+        ));
+        let timeout = shutdown_seconds.to_string();
         let upid = pve
             .post(
                 &format!("/nodes/{node}/lxc/{id}/status/shutdown"),
-                &[("timeout", "60"), ("forceStop", "0")],
+                &[("timeout", timeout.as_str()), ("forceStop", "0")],
             )
             .await
             .map_err(|e| e.to_string())?;

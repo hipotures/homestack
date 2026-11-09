@@ -14,8 +14,9 @@ use crate::node::{self, NewContainer};
 pub struct Replace<'a> {
     /// The new container; its description tells it from the old one.
     pub spec: NewContainer<'a>,
-    /// Shut the old container down gracefully instead of stopping it.
-    pub graceful: bool,
+    /// Seconds a graceful shutdown of the old container may take; `None`
+    /// stops it immediately.
+    pub shutdown_seconds: Option<u32>,
     /// Configuration keys the new container keeps; `env` is merged over the
     /// new image's own entries. The holder also preserves these for containers
     /// without mount-point volumes.
@@ -258,16 +259,23 @@ async fn prepare_holder(
     Ok(())
 }
 
-async fn stop(pve: &impl Pve, node: &str, ctid: u32, graceful: bool, say: &impl Fn(&str)) -> Result<(), String> {
+async fn stop(
+    pve: &impl Pve,
+    node: &str,
+    ctid: u32,
+    shutdown_seconds: Option<u32>,
+    say: &impl Fn(&str),
+) -> Result<(), String> {
     if !running(pve, node, ctid).await? {
         return Ok(());
     }
     say(&format!("  stopping CT {ctid}"));
-    if graceful {
+    if let Some(seconds) = shutdown_seconds {
+        let timeout = seconds.to_string();
         let upid = pve
             .post(
                 &format!("/nodes/{node}/lxc/{ctid}/status/shutdown"),
-                &[("timeout", "60"), ("forceStop", "0")],
+                &[("timeout", timeout.as_str()), ("forceStop", "0")],
             )
             .await
             .map_err(|e| format!("shutdown CT {ctid}: {e}"))?;
@@ -388,13 +396,13 @@ pub async fn replace(pve: &impl Pve, r: &Replace<'_>, say: &impl Fn(&str)) -> Re
         let keys = mounts(&cfg)?;
         match holder {
             None if keys.is_empty() && r.keep.is_empty() && crate::devices::read(&cfg)?.is_empty() => {
-                stop(pve, node, ctid, r.graceful, say).await?;
+                stop(pve, node, ctid, r.shutdown_seconds, say).await?;
                 remove_bare(pve, node, ctid, say).await?;
             }
             Some(false) => prepare_holder(pve, r, &cfg, true, say).await?,
             None => prepare_holder(pve, r, &cfg, false, say).await?,
             Some(true) => {
-                stop(pve, node, ctid, r.graceful, say).await?;
+                stop(pve, node, ctid, r.shutdown_seconds, say).await?;
                 for key in &keys {
                     move_volume(pve, node, ctid, HOLDER_ID, key, say).await?;
                 }

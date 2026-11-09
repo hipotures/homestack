@@ -181,7 +181,14 @@ pub fn parse(service: &str, defaults: &str, inputs: &str, directory: &str) -> Re
     keys(
         &service["runtime"],
         "service.runtime",
-        &["ports", "healthcheck", "configuration", "telemetry", "devices"],
+        &[
+            "ports",
+            "healthcheck",
+            "stop_timeout_seconds",
+            "configuration",
+            "telemetry",
+            "devices",
+        ],
     )?;
     if let Some(fields) = inputs["inputs"].as_array() {
         for (index, input) in fields.iter().enumerate() {

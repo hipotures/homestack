@@ -1367,7 +1367,7 @@ async fn one(
             pve,
             &recreate::Replace {
                 spec,
-                graceful: true,
+                shutdown_seconds: Some(source.manifest.stop_timeout_seconds),
                 keep: KEEP,
                 defaults: &defaults,
                 note: &note,
@@ -1376,7 +1376,7 @@ async fn one(
         )
         .await?;
     } else {
-        root_image::replace(pve, &spec, &defaults, say).await?;
+        root_image::replace(pve, &spec, &defaults, source.manifest.stop_timeout_seconds, say).await?;
     }
     if reviewed.root_image {
         let cfg = root_image::config(pve, node, ctid).await?;

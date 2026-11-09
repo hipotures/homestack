@@ -584,7 +584,7 @@ pub async fn apply(config: &DeployConfig, only: &[String], say: &impl Fn(&str)) 
                 &pve,
                 &recreate::Replace {
                     spec,
-                    graceful: false,
+                    shutdown_seconds: None,
                     keep: &[],
                     defaults: &[],
                     note: "",

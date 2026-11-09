@@ -33,6 +33,8 @@ const SHARED_DIRECTORIES: [&str; 11] = [
     "/var/lock",
     "/var/log",
 ];
+/// Graceful shutdown limit when `runtime.stop_timeout_seconds` is omitted.
+pub const DEFAULT_STOP_TIMEOUT_SECONDS: u32 = 60;
 /// The top-level sections, in the order they are shown.
 pub const SECTIONS: [&str; 8] = [
     "schema",
@@ -55,6 +57,8 @@ pub struct Manifest {
     pub resources: Option<Resources>,
     pub ports: Vec<Port>,
     pub healthcheck: Option<Healthcheck>,
+    /// How long a graceful shutdown may take before the update gives up.
+    pub stop_timeout_seconds: u32,
     /// `None`: an empty `persistence`, no home volume.
     pub persistence: Option<Persistence>,
     pub deployment: Deployment,
@@ -466,7 +470,7 @@ pub fn parse(text: &str) -> Result<Checked, String> {
             Some(id),
             Some(name),
             Some(image_repository),
-            Some((resources, ports, healthcheck)),
+            Some((resources, ports, healthcheck, stop_timeout_seconds)),
             Some(persistence),
             Some(deployment),
             Some(pangolin),
@@ -478,6 +482,7 @@ pub fn parse(text: &str) -> Result<Checked, String> {
             resources,
             ports,
             healthcheck,
+            stop_timeout_seconds,
             persistence,
             deployment,
             pangolin,
@@ -506,11 +511,15 @@ fn image_of(check: &mut Check, value: &Yaml) -> Option<String> {
     Some(repository)
 }
 
-type Runtime = (Option<Resources>, Vec<Port>, Option<Healthcheck>);
+type Runtime = (Option<Resources>, Vec<Port>, Option<Healthcheck>, u32);
 
 fn runtime_of(check: &mut Check, value: &Yaml) -> Option<Runtime> {
     let path = vec!["runtime".to_owned()];
-    let runtime = check.mapping(value, &path, &["resources", "ports", "healthcheck"])?;
+    let runtime = check.mapping(
+        value,
+        &path,
+        &["resources", "ports", "healthcheck", "stop_timeout_seconds"],
+    )?;
     let resources = match check.required(runtime, &path, "resources") {
         Some(Yaml::Null) => Some(None),
         Some(value) => resources_of(check, value, &at(&path, "resources")).map(Some),
@@ -525,7 +534,13 @@ fn runtime_of(check: &mut Check, value: &Yaml) -> Option<Runtime> {
         (Some(value), Some(ports)) => healthcheck_of(check, value, &at(&path, "healthcheck"), ports).map(Some),
         (Some(_), None) => None,
     };
-    Some((resources?, ports?, healthcheck?))
+    let stop_timeout_seconds = match field(runtime, "stop_timeout_seconds") {
+        None => Some(DEFAULT_STOP_TIMEOUT_SECONDS),
+        Some(value) => check
+            .integer(value, &at(&path, "stop_timeout_seconds"), 10..=3600)
+            .and_then(|seconds| u32::try_from(seconds).ok()),
+    };
+    Some((resources?, ports?, healthcheck?, stop_timeout_seconds?))
 }
 
 fn resources_of(check: &mut Check, value: &Yaml, path: &[String]) -> Option<Resources> {
@@ -787,7 +802,7 @@ fn exposure_of(check: &mut Check, value: &Yaml, runtime: Option<&Runtime>) -> Op
     let port = check
         .required(fields, &path, "port")
         .and_then(|value| check.string(value, &at(&path, "port")));
-    if let (Some(port), Some((_, ports, healthcheck))) = (&port, runtime) {
+    if let (Some(port), Some((_, ports, healthcheck, _))) = (&port, runtime) {
         if !ports.iter().any(|known| known.name == *port) {
             check.fail(&at(&path, "port"), format!("{port} is not a name in runtime.ports"));
         } else if !matches!(healthcheck, Some(Healthcheck::Http { port: probe, .. }) if probe == port) {

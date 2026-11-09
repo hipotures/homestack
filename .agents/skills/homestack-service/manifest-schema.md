@@ -73,6 +73,7 @@ until the manifest is fixed. Unknown keys are never ignored silently.
 | `runtime.healthcheck.path` | string | `http` only | absolute URL path starting with `/` |
 | `runtime.healthcheck.expected_status` | integer | `http` only | 100–599 |
 | `runtime.healthcheck.heartbeat_seconds` | integer | no (default `60`), `http` only | heartbeat interval, 10–3600; passed to the container as `HOMESTACK_HEARTBEAT_SECONDS`; health fails after three missed beats |
+| `runtime.stop_timeout_seconds` | integer | no (default `60`) | 10–3600; how long an image update waits for the old container's graceful shutdown (SIGTERM) before it pauses without forcing a stop |
 | `persistence` | mapping or empty | yes | empty: no home volume, the service is stateless |
 | `persistence.mount` | string | no (default `/home/app`) | absolute path where the home volume (`mp0`) is mounted inside the container; see [Persistent mount path](#persistent-mount-path) |
 | `persistence.size` | size | yes | default size of a new home volume, at least `1M` |
