@@ -160,8 +160,8 @@ async fn root_switch_and_every_interruption_preserve_home_devices_and_ctid() {
             interrupt: (interruption > 0).then_some(interruption),
         }));
         let spec = spec();
-        if replace(&fake, &spec, &|_| {}).await.is_err() {
-            replace(&fake, &spec, &|_| {}).await.unwrap();
+        if replace(&fake, &spec, &[], 60, &|_| {}).await.is_err() {
+            replace(&fake, &spec, &[], 60, &|_| {}).await.unwrap();
         }
         let state = fake.0.lock().unwrap();
         assert_eq!(state.cts.len(), 1);
