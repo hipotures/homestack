@@ -37,7 +37,7 @@ button.icon:hover:not(:disabled) { color: var(--agent, var(--text)); border-colo
 button.icon.busy svg { display: none; }
 button.icon.busy::after { margin-left: 0; }
 .warn { font-size: var(--fs-small); color: var(--warn); }
-.newer { color: var(--codex); font-weight: 600; }
+.newer { color: var(--agent, var(--text)); font-weight: 600; }
 
 /* controls */
 button, input, select { font: inherit; font-size: 13px; color: var(--text); }
