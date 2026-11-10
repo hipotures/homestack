@@ -944,6 +944,65 @@ fn lookup_price<'a>(prices: &'a Value, model: &str) -> Option<&'a Value> {
     }
     None
 }
+/// Compare only Claude Code and Codex using the same accounting as the overview.
+fn usage_share(all: &[Dataset], selection: &Selection, range: &TimeRange) -> Dataset {
+    let mut output = make("all", "share", "ratio", selection, range, Vec::new(), true);
+    let mut totals = BTreeMap::new();
+    for measurement in ["cost", "tokens"] {
+        let pair: Vec<_> = ["claude", "codex"]
+            .into_iter()
+            .filter_map(|agent| all.iter().find(|d| d.agent == agent && d.measurement == measurement))
+            .collect();
+        if pair.len() != 2 {
+            continue;
+        }
+        output.warnings.extend(pair.iter().flat_map(|d| d.warnings.clone()));
+        // Unknown or incomplete accounting must not become a fabricated 0% or 100%.
+        if pair
+            .iter()
+            .any(|d| d.state != Availability::Available || d.total.is_none())
+        {
+            continue;
+        }
+        let mut buckets = BTreeMap::<u64, [f64; 2]>::new();
+        for (index, d) in pair.iter().enumerate() {
+            for series in &d.series {
+                if measurement == "tokens" && series.dimensions.get("category").map(String::as_str) != Some("total") {
+                    continue;
+                }
+                for (time, value) in &series.points {
+                    buckets.entry(*time).or_default()[index] += value;
+                }
+            }
+        }
+        let points = buckets
+            .into_iter()
+            .filter_map(|(time, [claude, codex])| (claude + codex > 0.).then_some((time, claude / (claude + codex))))
+            .collect();
+        let claude = pair[0].total.unwrap_or(0.);
+        let codex = pair[1].total.unwrap_or(0.);
+        totals.insert(
+            measurement,
+            json!({"claude":claude,"codex":codex,"share":if claude+codex>0. {Some(claude/(claude+codex))}else{None}}),
+        );
+        output.series.push(Series {
+            id: measurement.into(),
+            label: measurement.into(),
+            dimensions: [("metric".into(), measurement.into())].into(),
+            points,
+        });
+    }
+    output.state = if output.series.is_empty() {
+        Availability::Missing
+    } else {
+        Availability::Available
+    };
+    output.total = None;
+    output.details = json!(totals);
+    output.warnings.sort();
+    output.warnings.dedup();
+    output
+}
 fn normalize(
     global: &Global,
     selection: Selection,
@@ -958,6 +1017,7 @@ fn normalize(
             all.extend(agent_data(global, &global.range, &selection, agent, prices));
         }
     }
+    all.push(usage_share(&all, &selection, &global.range));
     let mut values = summary_values(&all);
     if let Some(previous) = &global.previous {
         let datasets: Vec<_> = ["claude", "codex", "antigravity"]
@@ -1188,7 +1248,7 @@ fn enrich(d: &mut Dataset) {
             })
             .collect();
         d.details = json!({"categories":categories.into_iter().map(|(id,p)|json!({"id":id,"label":id,"points":p.into_iter().collect::<Vec<_>>()})).collect::<Vec<_>>(),"models":models.into_iter().map(|(id,p)|json!({"id":id,"label":id,"points":p.into_iter().collect::<Vec<_>>()})).collect::<Vec<_>>(),"cacheHit":hit,"modelCacheHit":model_hit});
-    } else if !["summary", "activity", "spikes", "scopes"].contains(&d.measurement.as_str()) {
+    } else if !["summary", "activity", "spikes", "scopes", "share"].contains(&d.measurement.as_str()) {
         for s in &d.series {
             for (t, v) in &s.points {
                 *timeline.entry(*t).or_default() += v;

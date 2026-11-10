@@ -266,7 +266,46 @@
       kpi("Cache hit",totals.cacheHit?.value==null?"—":F.pct(totals.cacheHit.value*100),delta(totals.cacheHit?.value,previous.cacheHit,{goodUp:true,points:true}),hitBars,hitNote),
       kpi("Output",F.tokens(output),delta(output,previous.output),sparkline(spark(outputs),getComputedStyle(document.documentElement).getPropertyValue("--tok-output").trim()),outputBody,"Output includes reasoning tokens",F.full(output)),
     ].join("");
-    renderTrend(range,firstActive);renderScopes(range);renderComposition(totals);renderModels();renderHours();renderHeat();renderSpikes(summary,range);renderAgents(summary,range);
+    renderTrend(range,firstActive);renderShare();renderScopes(range);renderComposition(totals);renderModels();renderHours();renderHeat();renderSpikes(summary,range);renderAgents(summary,range);
+  }
+  let shareMetric="cost",shareChart,shareSpecs=[];
+  try{shareMetric=localStorage.getItem("shareMetric")==="tokens"?"tokens":"cost";}catch(_){}
+  function renderShare() {
+    const d=datasets.get("all.share"),card=$("share");
+    card.hidden=selection.agent!=="all"||!d;shareSpecs=[];if(card.hidden)return;
+    shareSpecs=d.series.map(s=>({title:`Claude Code share of ${s.id}`,unit:"ratio",series:[{...s,label:"Claude Code share",dataset:d.id}]}));
+    const range=d.range,series=d.series.find(s=>s.id===shareMetric),values=new Map(series?.points||[]);
+    const first=series?.points[0]?.[0]??range.start;
+    const points=buckets(range).filter(t=>t>=first).map(t=>[t*1000,values.get(t)??null]);
+    const orange=AIUsage.colorFor("Claude Code"),blue=AIUsage.colorFor("Codex"),totals=d.details[shareMetric];
+    const fmt=shareMetric==="cost"?v=>F.cost(v,true):F.full;
+    for(const b of document.querySelectorAll("[data-share-metric]"))b.setAttribute("aria-pressed",String(b.dataset.shareMetric===shareMetric));
+    $("share-sub").textContent=`Claude Code share of ${shareMetric} · ${bucketLabel(range.step)} · 50% is an even split`;
+    $("share-totals").innerHTML=totals?.share!=null?["claude","codex"].map((a,i)=>`<span><i class="sw" style="background:${i?blue:orange}"></i>${agents[a]} <strong>${F.pct((i?1-totals.share:totals.share)*100)}</strong> · ${esc(fmt(totals[a]))}</span>`).join("")+`<span class="faint">selected range</span>`:"";
+    $("share-note").textContent=["100% = Claude Code + Codex. Antigravity excluded. Empty buckets are gaps.",shareMetric==="cost"?"Codex cost uses estimated API rates, not subscription charges.":"",!series?.points.length?"Comparison unavailable: both agents need complete usage data in this scope.":"",...(shareMetric==="cost"?d.warnings:[])].filter(Boolean).join(" ");
+    $("share-chart").hidden=!series?.points.length;if($("share-chart").hidden)return;
+    // Fill each line segment back to the 50% baseline; split exactly at crossings.
+    const areas=[];
+    for(let i=1;i<points.length;i++){
+      const [x,a]=points[i-1],[y,b]=points[i];if(a==null||b==null)continue;
+      if((a-.5)*(b-.5)<0){const cross=x+(y-x)*(.5-a)/(b-a);areas.push([x,a,cross,.5],[cross,.5,y,b]);}
+      else areas.push([x,a,y,b]);
+    }
+    shareChart=shareChart||AIUsage.init($("share-chart"));
+    const latest=series.points.at(-1);
+    shareChart.setOption({
+      grid:{left:8,right:62,top:24,bottom:8,containLabel:true},
+      tooltip:{trigger:"axis",formatter:params=>{const p=params.find(p=>p.seriesId==="share-line"),v=p?.value?.[1];return v==null?"No usage in this bucket":`${esc(new Date(p.value[0]).toLocaleString())}<br>Claude Code: ${F.pct(v*100)}<br>Codex: ${F.pct((1-v)*100)}`;}},
+      xAxis:{type:"time",min:first*1000,max:range.end*1000,axisLabel:{hideOverlap:true}},
+      yAxis:{type:"value",min:0,max:1,interval:.25,axisLabel:{showMinLabel:true,showMaxLabel:true,formatter:v=>`${Math.round(v*100)}%`}},
+      series:[{id:"share-fill",type:"custom",coordinateSystem:"cartesian2d",silent:true,tooltip:{show:false},data:areas,
+        renderItem:(params,api)=>{const a=api.value(1),b=api.value(3),color=(a+b)/2>=.5?orange:blue,left=api.coord([api.value(0),a]),right=api.coord([api.value(2),b]);return {type:"group",children:[{type:"polygon",shape:{points:[api.coord([api.value(0),.5]),left,right,api.coord([api.value(2),.5])]},style:{fill:color,opacity:.16}},{type:"polyline",shape:{points:[left,right]},style:{stroke:color,lineWidth:2,fill:null}}]};},
+      },{id:"share-line",name:"Claude Code share",type:"line",data:points,showSymbol:true,symbolSize:(value,p)=>points[p.dataIndex-1]?.[1]==null&&points[p.dataIndex+1]?.[1]==null?6:0,itemStyle:{color:p=>p.value[1]>=.5?orange:blue},connectNulls:false,lineStyle:{opacity:0},
+        markLine:{silent:true,symbol:"none",label:{show:false},lineStyle:{color:css("--muted"),type:"dashed",width:1},data:[{yAxis:.5}]},
+        markPoint:{symbol:"circle",symbolSize:6,itemStyle:{color:latest[1]>=.5?orange:blue},label:{show:true,position:"right",color:css("--text"),formatter:F.pct(latest[1]*100)},data:[{coord:[latest[0]*1000,latest[1]]}]},
+      }],
+    },{replaceMerge:["series"]});
+    shareChart.resize();
   }
   function quotaOverlay(range) {
     const enabledEvents=$("limit-events").checked,enabledPeriods=$("limit-periods").checked;
@@ -744,7 +783,7 @@
   document.addEventListener("DOMContentLoaded",()=>{
     for(const id of ["limit-events","limit-periods"]){$(id).checked=false;$(id).onchange=()=>{if(datasets.size)renderOverview();};}
     theme();$("theme").onclick=()=>{currentTheme=currentTheme==="dark"?"light":"dark";try{localStorage.setItem("theme",currentTheme);}catch(_){}theme();};
-    $("export-all").onclick=()=>copyCharts($("export-all"),[...Object.values(modelViews).map(v=>v.spec).filter(Boolean),...[...widgets.values()].map(w=>w.spec)],true);
+    $("export-all").onclick=()=>copyCharts($("export-all"),[...shareSpecs,...Object.values(modelViews).map(v=>v.spec).filter(Boolean),...[...widgets.values()].map(w=>w.spec)],true);
     $("model-pick").onchange=event=>{modelKey=event.target.value;try{localStorage.setItem("model",modelKey);}catch(_){}renderModelTokens();};
     for(const v of Object.values(modelViews)){
       const card=$(v.id),toggle=card.querySelector(".toggle"),copy=card.querySelector(".copy");
@@ -754,6 +793,7 @@
     for(const b of document.querySelectorAll("[data-scope-by]"))b.onclick=()=>{scopeBy=b.dataset.scopeBy;try{localStorage.setItem("scopeBy",scopeBy);}catch(_){}if(datasets.size)renderOverview();};
     $("trend-chips").onclick=event=>{if(event.target.closest("#brush-clear"))clearBrush();};
     document.addEventListener("keydown",event=>{if(event.key==="Escape")clearBrush();});
+    for(const b of document.querySelectorAll("[data-share-metric]"))b.onclick=()=>{shareMetric=b.dataset.shareMetric;try{localStorage.setItem("shareMetric",shareMetric);}catch(_){}if(datasets.size)renderShare();};
     for(const b of document.querySelectorAll("[data-metric]"))b.onclick=()=>{metric=b.dataset.metric;try{localStorage.setItem("metric",metric);}catch(_){}if(datasets.size)renderOverview();};
     $("agents").onclick=event=>{
       const tab=event.target.closest("[data-tab]"),goto=event.target.closest("[data-goto]");

@@ -203,6 +203,13 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--codex); ou
 <div class="chart tall" id="trend-chart" role="img" aria-label="Usage over time, stacked by model"></div>
 <div class="limit-controls"><label><input type="checkbox" id="limit-events"> Limit exhaustion markers</label><label><input type="checkbox" id="limit-periods"> Quota windows and resets</label></div>
 </section>
+<section class="card" id="share" aria-label="Claude Code versus Codex" hidden>
+<div class="card-top"><div><h2><span style="color:var(--claude)">Claude Code</span> vs <span style="color:var(--codex)">Codex</span></h2><span class="sub" id="share-sub"></span></div>
+<div class="seg" role="group" aria-label="Share metric"><button type="button" data-share-metric="cost">Cost</button><button type="button" data-share-metric="tokens">Tokens</button></div></div>
+<div class="legend" id="share-totals"></div>
+<div class="note" id="share-note"></div>
+<div class="chart tall" id="share-chart" role="img" aria-label="Claude Code share over time; 50% is an even split with Codex"></div>
+</section>
 <section class="card" id="scopes" aria-label="Usage by server or project" hidden>
 <div class="card-top"><div><h2 id="scopes-title">Cost by project</h2><span class="sub" id="scopes-sub"></span></div>
 <div class="card-tools"><div class="seg" role="group" aria-label="Breakdown" id="scopes-by"><button type="button" data-scope-by="project">Projects</button><button type="button" data-scope-by="host">Servers</button></div></div></div>
