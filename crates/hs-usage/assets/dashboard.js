@@ -261,7 +261,7 @@
     const outputBody=output?`<div class="stack"><div class="split" aria-hidden="true"><span style="width:${(share||0)*100}%;background:var(--tok-reasoning)"></span><span style="width:${(1-(share||0))*100}%;background:var(--tok-output)"></span></div>
       <div class="legend-row"><span>${share==null?"reasoning not reported":`<span style="color:var(--tok-reasoning)">●</span> reasoning ${F.tokens(reasoning)} · ${Math.round(share*100)}%`}</span><span>response ${F.tokens(output-(reasoning||0))}</span></div></div>`:"";
     $("kpis").innerHTML=[
-      kpi("Cost",F.cost(totals.cost?.value),delta(totals.cost?.value,previous.cost),sparkline(spark(cost),lead),split("cost",summary),"Codex and Antigravity costs are estimated from standard API prices",F.cost(totals.cost?.value,true)),
+      kpi("Cost",F.cost(totals.cost?.value),delta(totals.cost?.value,previous.cost),sparkline(spark(cost),lead),split("cost",summary),"",F.cost(totals.cost?.value,true)),
       kpi("Tokens",F.tokens(totals.total?.value),delta(totals.total?.value,previous.total),sparkline(spark(totalSeries),lead),split("total",summary),"",F.full(totals.total?.value)),
       kpi("Cache hit",totals.cacheHit?.value==null?"—":F.pct(totals.cacheHit.value*100),delta(totals.cacheHit?.value,previous.cacheHit,{goodUp:true,points:true}),hitBars,hitNote),
       kpi("Output",F.tokens(output),delta(output,previous.output),sparkline(spark(outputs),getComputedStyle(document.documentElement).getPropertyValue("--tok-output").trim()),outputBody,"Output includes reasoning tokens",F.full(output)),
@@ -282,7 +282,7 @@
     for(const b of document.querySelectorAll("[data-share-metric]"))b.setAttribute("aria-pressed",String(b.dataset.shareMetric===shareMetric));
     $("share-sub").textContent=`Claude Code share of ${shareMetric} · ${bucketLabel(range.step)} · 50% is an even split`;
     $("share-totals").innerHTML=totals?.share!=null?["claude","codex"].map((a,i)=>`<span><i class="sw" style="background:${i?blue:orange}"></i>${agents[a]} <strong>${F.pct((i?1-totals.share:totals.share)*100)}</strong> · ${esc(fmt(totals[a]))}</span>`).join("")+`<span class="faint">selected range</span>`:"";
-    $("share-note").textContent=["100% = Claude Code + Codex. Antigravity excluded. Empty buckets are gaps.",shareMetric==="cost"?"Codex cost uses estimated API rates, not subscription charges.":"",!series?.points.length?"Comparison unavailable: both agents need complete usage data in this scope.":"",...(shareMetric==="cost"?d.warnings:[])].filter(Boolean).join(" ");
+    $("share-note").textContent=["100% = Claude Code + Codex. Antigravity excluded. Empty buckets are gaps.",!series?.points.length?"Comparison unavailable: both agents need complete usage data in this scope.":"",...(shareMetric==="cost"?d.warnings:[])].filter(Boolean).join(" ");
     $("share-chart").hidden=!series?.points.length;if($("share-chart").hidden)return;
     // Fill each line segment back to the 50% baseline; split exactly at crossings.
     const areas=[];
@@ -465,7 +465,7 @@
     const fmtShort=unit==="cost"?v=>F.cost(v):F.tokens,fmtFull=unit==="cost"?v=>F.cost(v,true):F.full;
     const first=Math.min(...rows.flatMap(r=>r.points.filter(([,v])=>v>0).map(([t])=>t))),times=buckets(range).filter(t=>t>=first);
     $("scopes-title").textContent=`${unit==="cost"?"Cost":"Tokens"} by ${names[by]}`;
-    $("scopes-sub").textContent=`${bucketLabel(range.step)} · stacked by ${names[by]}${unit==="cost"&&chosen().some(a=>["codex","antigravity"].includes(a))?" · Codex/Antigravity cost estimated":""}`;
+    $("scopes-sub").textContent=`${bucketLabel(range.step)} · stacked by ${names[by]}`;
     $("scopes-chips").innerHTML=[first>range.start?`<span class="chip">data since ${timeLabel(first,range)}</span>`:"",...(unit==="cost"?d.warnings:[]).map(w=>`<span class="chip">${esc(w)}</span>`)].join("");
     scopesChart=scopesChart||AIUsage.init($("scopes-chart"));
     scopesChart.setOption({
