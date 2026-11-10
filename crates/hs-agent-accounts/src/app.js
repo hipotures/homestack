@@ -157,14 +157,7 @@ async function refresh() {
   for (const profile of profiles) {
     const card = node('article', undefined, `card provider-${profile.provider}`);
     const identity = node('div', undefined, 'identity');
-    const title = node('div', undefined, 'title-line');
-    title.append(node('h2', profile.display_name));
-    const end = profile.account?.period_end;
-    if (end) {
-      const left = title.appendChild(node('span', periodLeft(end), 'sub period'));
-      left.title = `Period start: ${time(profile.account.period_start)}\nPeriod end: ${time(end)}`;
-    }
-    identity.append(node('span', profile.provider, 'eyebrow agent'), title);
+    identity.append(node('span', profile.provider, 'eyebrow agent'), node('h2', profile.display_name));
     const email = profile.account?.email;
     identity.append(node('span', email && email !== profile.display_name ? email : '', 'sub slot'));
     const pills = node('div', undefined, 'pills');
@@ -173,6 +166,11 @@ async function refresh() {
     if (profile.account?.plan) pills.append(node('span', profile.account.plan, 'pill'));
     const header = node('div', undefined, 'profile-head');
     header.append(identity);
+    const end = profile.account?.period_end;
+    if (end) {
+      const left = header.appendChild(node('span', periodLeft(end), 'sub period'));
+      left.title = `Period start: ${time(profile.account.period_start)}\nPeriod end: ${time(end)}`;
+    }
     const groups = profile.provider === 'antigravity' ? [...new Set((profile.snapshot?.limits || []).map(l => l.model).filter(Boolean))] : [];
     let selectedGroup = quotaGroups.get(profile.id);
     if (!groups.includes(selectedGroup)) selectedGroup = groups.find(g => g === 'Gemini 4 Argon') || groups[0];
