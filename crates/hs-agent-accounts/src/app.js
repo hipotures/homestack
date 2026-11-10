@@ -36,6 +36,26 @@ function periodLeft(end) {
   const days = Math.floor(minutes / 1440), hours = Math.floor(minutes % 1440 / 60);
   return 'Ends in ' + (days ? `${days}d ${hours}h` : `${hours}h ${minutes % 60}m`);
 }
+/** Adds calendar months the way subscription billing does: a missing day falls back to the month's last day. */
+function addMonths(seconds, months) {
+  const d = new Date(seconds * 1000), day = d.getDate();
+  d.setDate(1); d.setMonth(d.getMonth() + months);
+  d.setDate(Math.min(day, new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()));
+  return Math.floor(d.getTime() / 1000);
+}
+const localInput = seconds => time(seconds).replace(' ', 'T');
+let paymentProfile = null;
+function editPayment(profile) {
+  paymentProfile = profile;
+  $('#payment-at').value = profile.last_payment ? localInput(profile.last_payment) : '';
+  $('#payment-dialog').showModal();
+}
+async function savePayment(value) {
+  try {
+    await api(`/profiles/${paymentProfile.id}`, 'PATCH', { last_payment: value });
+    $('#payment-dialog').close(); await refresh();
+  } catch (error) { notice(error); }
+}
 const percent = value => value == null ? 'unknown' : `${value.toFixed(1)}% used · ${Math.max(0, 100 - value).toFixed(1)}% left`;
 function setText(element, text) { if (element.textContent !== text) element.textContent = text; }
 const notice = error => { $('#notice').textContent = error.message || error; };
@@ -166,10 +186,19 @@ async function refresh() {
     if (profile.account?.plan) pills.append(node('span', profile.account.plan, 'pill'));
     const header = node('div', undefined, 'profile-head');
     header.append(identity);
-    const end = profile.account?.period_end;
-    if (end) {
-      const left = header.appendChild(node('span', periodLeft(end), 'sub period'));
-      left.title = `Period start: ${time(profile.account.period_start)}\nPeriod end: ${time(end)}`;
+    const manual = profile.provider === 'claude';
+    const start = manual ? profile.last_payment : profile.account?.period_start;
+    const end = manual ? start && addMonths(start, 1) : profile.account?.period_end;
+    if (end || manual) {
+      const left = header.appendChild(node('span', end ? periodLeft(end) : 'Set last payment', 'sub period'));
+      left.title = end ? `Period start: ${time(start)}\nPeriod end: ${time(end)}` : 'Enter the time of the latest receipt';
+      if (manual) {
+        left.classList.add('manual');
+        if (!end || end <= Date.now() / 1000) left.classList.add('unset');
+        left.tabIndex = 0; left.setAttribute('role', 'button');
+        left.onclick = () => editPayment(profile);
+        left.onkeydown = event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); editPayment(profile); } };
+      }
     }
     const groups = profile.provider === 'antigravity' ? [...new Set((profile.snapshot?.limits || []).map(l => l.model).filter(Boolean))] : [];
     let selectedGroup = quotaGroups.get(profile.id);
@@ -323,6 +352,12 @@ $('#code-form').onsubmit = async event => {
     $('#auth-code').value = ''; $('#code-form').hidden = true;
   } catch (error) { notice(error); }
 };
+$('#payment-form').onsubmit = event => { event.preventDefault(); savePayment(Math.floor(new Date($('#payment-at').value).getTime() / 1000)); };
+$('#payment-next').onclick = () => {
+  const value = $('#payment-at').value;
+  if (value) $('#payment-at').value = localInput(addMonths(new Date(value).getTime() / 1000, 1));
+};
+$('#payment-clear').onclick = () => savePayment(null);
 $('#add').onclick = () => $('#add-dialog').showModal();
 document.querySelectorAll('[data-close]').forEach(button => { button.onclick = () => button.closest('dialog').close(); });
 $('#create').onsubmit = async event => {

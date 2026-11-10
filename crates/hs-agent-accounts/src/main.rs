@@ -268,22 +268,36 @@ async fn create(State(c): State<Arc<Context>>, Json(v): Json<Create>) -> Result<
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Edit {
-    enabled: bool,
+    enabled: Option<bool>,
+    #[serde(default, deserialize_with = "present")]
+    last_payment: Option<Option<i64>>,
+}
+/// Tells an explicit `null` (clear the value) from an omitted field.
+fn present<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Option<Option<i64>>, D::Error> {
+    Option::deserialize(d).map(Some)
 }
 async fn edit(State(c): State<Arc<Context>>, Path(id): Path<String>, Json(v): Json<Edit>) -> Result<Json<Profile>> {
     c.db.profile(&id)?;
-    c.cancel_profile(&id);
+    if v.enabled.is_some() {
+        c.cancel_profile(&id);
+    }
     let lock = c.lock(&id);
     let _guard = lock.lock().await;
     let mut p = c.db.profile(&id)?;
     if p.deleting {
         return Err(Failure::new("busy", "Profile is being deleted"));
     }
-    p.enabled = v.enabled;
+    if let Some(last_payment) = v.last_payment {
+        p.last_payment = last_payment;
+    }
+    let resumed = v.enabled.is_some_and(|enabled| {
+        p.enabled = enabled;
+        enabled
+    });
     p.updated_at = now();
     c.db.save(&p, None)?;
     drop(_guard);
-    if p.enabled {
+    if resumed {
         let _ = c.begin(&p, "probe")?;
     }
     Ok(Json(p))

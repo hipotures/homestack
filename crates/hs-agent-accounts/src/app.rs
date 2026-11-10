@@ -221,6 +221,7 @@ impl Context {
             total_failures: 0,
             probe_duration_seconds: None,
             window_started_at: None,
+            last_payment: None,
             snapshot: None,
             notifications: Vec::new(),
             created_at: now(),

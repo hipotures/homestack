@@ -71,6 +71,9 @@ pub struct Profile {
     /// When a start_window request last completed; tells a just-started window from a not-started one.
     #[serde(default)]
     pub window_started_at: Option<i64>,
+    /// Owner-entered time of the latest subscription payment, for providers that do not report a billing period.
+    #[serde(default)]
+    pub last_payment: Option<i64>,
     pub snapshot: Option<Snapshot>,
     #[serde(default)]
     pub notifications: Vec<crate::telegram::Notification>,

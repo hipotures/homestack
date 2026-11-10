@@ -48,6 +48,12 @@
   <p>The new window resets at <strong id="start-reset" class="num"></strong>.</p>
   <footer><button value="cancel">Cancel</button><button value="start" class="primary">Start</button></footer>
 </form></dialog>
+<dialog id="payment-dialog"><form id="payment-form">
+  <h2>Last payment</h2>
+  <p class="sub">Date and time of the latest receipt. The billing period ends one month later.</p>
+  <label>Paid at<span class="payment-row"><input id="payment-at" type="datetime-local" required><button type="button" id="payment-next">+1 month</button></span></label>
+  <footer><button type="button" data-close>Cancel</button><button type="button" id="payment-clear">Clear</button><button class="primary">Save</button></footer>
+</form></dialog>
 <dialog id="details" class="wide">
   <h2>Account details</h2>
   <div id="detail-content"></div>
