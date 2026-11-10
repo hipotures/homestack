@@ -43,7 +43,18 @@ function addMonths(seconds, months) {
   d.setDate(Math.min(day, new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()));
   return Math.floor(d.getTime() / 1000);
 }
-const localInput = seconds => time(seconds).replace(' ', 'T');
+function localInput(seconds) {
+  const d = new Date(seconds * 1000);
+  return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+/** Parses local DD.MM.YYYY HH:MM as Unix seconds; null for a malformed or nonexistent time. */
+function parseInput(value) {
+  const m = value.trim().match(/^(\d{1,2})\.(\d{1,2})\.(\d{4}) (\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const [day, month, year, hour, minute] = m.slice(1).map(Number);
+  const d = new Date(year, month - 1, day, hour, minute);
+  return d.getDate() === day && d.getMonth() === month - 1 && d.getHours() === hour ? Math.floor(d.getTime() / 1000) : null;
+}
 let paymentProfile = null;
 function editPayment(profile) {
   paymentProfile = profile;
@@ -352,10 +363,16 @@ $('#code-form').onsubmit = async event => {
     $('#auth-code').value = ''; $('#code-form').hidden = true;
   } catch (error) { notice(error); }
 };
-$('#payment-form').onsubmit = event => { event.preventDefault(); savePayment(Math.floor(new Date($('#payment-at').value).getTime() / 1000)); };
+$('#payment-at').oninput = () => $('#payment-at').setCustomValidity('');
+$('#payment-form').onsubmit = event => {
+  event.preventDefault();
+  const value = parseInput($('#payment-at').value);
+  if (value == null) { $('#payment-at').setCustomValidity('Use DD.MM.YYYY HH:MM, for example 09.11.2026 16:55'); $('#payment-at').reportValidity(); return; }
+  savePayment(value);
+};
 $('#payment-next').onclick = () => {
-  const value = $('#payment-at').value;
-  if (value) $('#payment-at').value = localInput(addMonths(new Date(value).getTime() / 1000, 1));
+  const value = parseInput($('#payment-at').value);
+  if (value != null) $('#payment-at').value = localInput(addMonths(value, 1));
 };
 $('#payment-clear').onclick = () => savePayment(null);
 $('#add').onclick = () => $('#add-dialog').showModal();

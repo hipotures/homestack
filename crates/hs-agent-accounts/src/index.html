@@ -51,7 +51,7 @@
 <dialog id="payment-dialog"><form id="payment-form">
   <h2>Last payment</h2>
   <p class="sub">Date and time of the latest receipt. The billing period ends one month later.</p>
-  <label>Paid at<span class="payment-row"><input id="payment-at" type="datetime-local" required><button type="button" id="payment-next">+1 month</button></span></label>
+  <label>Paid at<span class="payment-row"><input id="payment-at" required placeholder="DD.MM.YYYY HH:MM" autocomplete="off" class="num"><button type="button" id="payment-next">+1 month</button></span></label>
   <footer><button type="button" data-close>Cancel</button><button type="button" id="payment-clear">Clear</button><button class="primary">Save</button></footer>
 </form></dialog>
 <dialog id="details" class="wide">
