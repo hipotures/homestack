@@ -30,6 +30,12 @@ function time(value) {
   const d = new Date(value * 1000);
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
+function periodLeft(end) {
+  const minutes = Math.floor((end - Date.now() / 1000) / 60);
+  if (minutes <= 0) return 'Period ended';
+  const days = Math.floor(minutes / 1440), hours = Math.floor(minutes % 1440 / 60);
+  return 'Ends in ' + (days ? `${days}d ${hours}h` : `${hours}h ${minutes % 60}m`);
+}
 const percent = value => value == null ? 'unknown' : `${value.toFixed(1)}% used · ${Math.max(0, 100 - value).toFixed(1)}% left`;
 function setText(element, text) { if (element.textContent !== text) element.textContent = text; }
 const notice = error => { $('#notice').textContent = error.message || error; };
@@ -151,7 +157,14 @@ async function refresh() {
   for (const profile of profiles) {
     const card = node('article', undefined, `card provider-${profile.provider}`);
     const identity = node('div', undefined, 'identity');
-    identity.append(node('span', profile.provider, 'eyebrow agent'), node('h2', profile.display_name));
+    const title = node('div', undefined, 'title-line');
+    title.append(node('h2', profile.display_name));
+    const end = profile.account?.period_end;
+    if (end) {
+      const left = title.appendChild(node('span', periodLeft(end), 'sub period'));
+      left.title = `Period start: ${time(profile.account.period_start)}\nPeriod end: ${time(end)}`;
+    }
+    identity.append(node('span', profile.provider, 'eyebrow agent'), title);
     const email = profile.account?.email;
     identity.append(node('span', email && email !== profile.display_name ? email : '', 'sub slot'));
     const pills = node('div', undefined, 'pills');

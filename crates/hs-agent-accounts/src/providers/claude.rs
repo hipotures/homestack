@@ -33,6 +33,8 @@ async fn identity(ctx: &Context, p: &Profile, binary: &Path) -> Result<Account> 
         provider_id: value["orgId"].as_str().map(str::to_owned),
         email: value["email"].as_str().map(str::to_owned),
         plan: value["subscriptionType"].as_str().map(str::to_owned),
+        period_start: None,
+        period_end: None,
     })
 }
 fn timestamp(v: &Value) -> Option<i64> {

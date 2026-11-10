@@ -45,6 +45,8 @@ async fn identity(ctx: &Context, p: &Profile, binary: &Path) -> Result<Account> 
             provider_id: None,
             email: None,
             plan: data["_meta"]["antigravity"]["tier"]["name"].as_str().map(str::to_owned),
+            period_start: None,
+            period_end: None,
         })
     }
     .await;

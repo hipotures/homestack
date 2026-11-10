@@ -110,6 +110,8 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--codex); outline
 
 .profile-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .profile-head .identity { min-width: 0; overflow-wrap: anywhere; flex: 1; }
+.title-line { display: flex; align-items: baseline; gap: 4px 12px; flex-wrap: wrap; }
+.period { white-space: nowrap; cursor: help; }
 .profile-head select { width: auto; max-width: 100%; min-height: 34px; }
 .provider-antigravity { --agent: var(--heat); }
 .provider-antigravity .quotas { min-height: 196px; }

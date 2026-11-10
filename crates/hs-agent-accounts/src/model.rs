@@ -22,6 +22,11 @@ pub struct Account {
     pub provider_id: Option<String>,
     pub email: Option<String>,
     pub plan: Option<String>,
+    /// Current paid billing period, as Unix seconds, when the provider reports it.
+    #[serde(default)]
+    pub period_start: Option<i64>,
+    #[serde(default)]
+    pub period_end: Option<i64>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

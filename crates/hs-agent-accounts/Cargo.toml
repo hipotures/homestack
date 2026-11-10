@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 axum = "0.8.9"
+base64 = "0.23.1"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 futures-util = "0.3.34"
 hs-service-status = { path = "../hs-service-status" }

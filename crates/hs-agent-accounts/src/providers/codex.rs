@@ -105,7 +105,42 @@ fn account(value: &Value) -> Result<Account> {
         provider_id: None,
         email: value["account"]["email"].as_str().map(str::to_owned),
         plan: value["account"]["planType"].as_str().map(str::to_owned),
+        period_start: None,
+        period_end: None,
     })
+}
+/// Reads the paid billing period from the ChatGPT ID token claims that Codex stores in the profile.
+fn billing_period(ctx: &Context, p: &Profile) -> (Option<i64>, Option<i64>) {
+    use base64::Engine;
+    let claims = process::profile_dir(&ctx.root, &p.id)
+        .ok()
+        .and_then(|dir| std::fs::read(dir.join("codex/auth.json")).ok())
+        .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
+        .and_then(|auth| {
+            auth["tokens"]["id_token"]
+                .as_str()?
+                .split('.')
+                .nth(1)
+                .map(str::to_owned)
+        })
+        .and_then(|payload| {
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(payload.trim_end_matches('='))
+                .ok()
+        })
+        .and_then(|json| serde_json::from_slice::<Value>(&json).ok())
+        .unwrap_or_default();
+    let auth = &claims["https://api.openai.com/auth"];
+    let time = |key: &str| {
+        auth[key]
+            .as_str()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|t| t.timestamp())
+    };
+    (
+        time("chatgpt_subscription_active_start"),
+        time("chatgpt_subscription_active_until"),
+    )
 }
 impl Provider for Codex {
     fn bundled_version(&self) -> Option<&'static str> {
@@ -134,6 +169,7 @@ impl Provider for Codex {
                 let value = child.rpc("account/rateLimits/read", json!({})).await?;
                 let observed = now();
                 identity.provider_id = value["accountId"].as_str().map(str::to_owned);
+                (identity.period_start, identity.period_end) = billing_period(ctx, p);
                 let buckets: Vec<(String, Value)> = match value["rateLimitsByLimitId"].as_object() {
                     Some(all) => all.iter().map(|(id, v)| (id.clone(), v.clone())).collect(),
                     None => vec![(
