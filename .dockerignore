@@ -6,3 +6,4 @@ parity/
 scenarios/
 docs/
 **/*.rs.bk
+tmp/
