@@ -42,11 +42,20 @@
   <form id="code-form" hidden><label>Authorization code<input id="auth-code" autocomplete="off" maxlength="4096"></label><button class="primary">Submit code</button></form>
   <footer><button id="cancel-operation" type="button">Cancel operation</button><button type="button" data-close>Close</button></footer>
 </dialog>
-<dialog id="start-dialog"><form method="dialog">
-  <h2 id="start-title">Start window?</h2>
-  <p>Sends one minimal request with no tools or project context, so the provider starts counting this window now.</p>
-  <p>The new window resets at <strong id="start-reset" class="num"></strong>.</p>
-  <footer><button value="cancel">Cancel</button><button value="start" class="primary">Start</button></footer>
+<dialog id="window-dialog"><form id="window-form">
+  <h2 id="window-title">Usage window</h2>
+  <p id="window-status" class="sub"></p>
+  <h3>Start now</h3>
+  <p class="sub">Sends one minimal request with no tools or project context, so the provider starts counting this window now. It would reset at <strong id="window-reset" class="num"></strong>.</p>
+  <div><button type="button" id="window-start">Start now</button></div>
+  <h3>Daily auto-start</h3>
+  <p class="sub">From this time until the tolerance ends, starts the window as soon as it is not running. At most once a day.</p>
+  <div class="window-row">
+    <label>Time<input id="auto-time" placeholder="HH:MM" autocomplete="off" class="num"></label>
+    <label>Tolerance (minutes)<input id="auto-tolerance" type="number" required min="1" max="720" step="1" class="num"></label>
+  </div>
+  <p id="auto-zone" class="meta"></p>
+  <footer><button type="button" data-close>Cancel</button><button type="button" id="auto-clear">Clear</button><button class="primary">Save</button></footer>
 </form></dialog>
 <dialog id="payment-dialog"><form id="payment-form">
   <h2>Last payment</h2>

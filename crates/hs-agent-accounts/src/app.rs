@@ -28,6 +28,8 @@ pub struct Context {
     pub gates: HashMap<String, Arc<RwLock<()>>>,
     pub slots: Semaphore,
     pub interval: u64,
+    /// Latest automatic window start per profile, so a failing start retries at a bounded pace.
+    pub auto_starts: Mutex<HashMap<String, i64>>,
     pub heartbeat_seconds: u64,
     pub heartbeat: Mutex<(Instant, u64)>,
     pub shutdown: CancellationToken,
@@ -105,6 +107,7 @@ impl Context {
                 .collect(),
             slots: Semaphore::new(concurrency),
             interval,
+            auto_starts: Mutex::new(HashMap::new()),
             heartbeat_seconds,
             heartbeat: Mutex::new((Instant::now(), 0)),
             shutdown: CancellationToken::new(),
@@ -222,6 +225,7 @@ impl Context {
             probe_duration_seconds: None,
             window_started_at: None,
             last_payment: None,
+            auto_start: None,
             snapshot: None,
             notifications: Vec::new(),
             created_at: now(),
@@ -500,12 +504,24 @@ impl Context {
             match self.db.profiles() {
                 Ok(ps) => {
                     for p in ps {
-                        if p.enabled
-                            && !p.deleting
-                            && p.auth_status == "authenticated"
-                            && self
-                                .provider(&p.provider)
-                                .is_ok_and(|adapter| adapter.capabilities().contains(&"subscription_limits"))
+                        let Ok(adapter) = self.provider(&p.provider) else {
+                            continue;
+                        };
+                        if !p.enabled || p.deleting || p.auth_status != "authenticated" {
+                            continue;
+                        }
+                        let capabilities = adapter.capabilities();
+                        if capabilities.contains(&"start_window")
+                            && p.auto_start.as_ref().is_some_and(|a| a.due(&p, now()))
+                        {
+                            let mut starts = self.auto_starts.lock().unwrap_or_else(PoisonError::into_inner);
+                            if starts.get(&p.id).is_none_or(|t| now() - t >= 120) {
+                                starts.insert(p.id.clone(), now());
+                                drop(starts);
+                                let _ = self.begin(&p, "start_window");
+                            }
+                        }
+                        if capabilities.contains(&"subscription_limits")
                             && p.last_attempt.is_none_or(|t| now() - t >= self.interval as i64)
                         {
                             let _ = self.begin(&p, "probe");

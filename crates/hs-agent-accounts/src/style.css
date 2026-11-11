@@ -115,6 +115,8 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--codex); outline
 .period.unset { opacity: .5; }
 .payment-row { display: flex; gap: 8px; align-items: center; }
 .payment-row input { flex: 1; }
+.window-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+#window-dialog h3 { margin-top: 8px; }
 .profile-head select { width: auto; max-width: 100%; min-height: 34px; }
 .provider-antigravity { --agent: var(--heat); }
 .provider-antigravity .quotas { min-height: 196px; }

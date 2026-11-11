@@ -82,15 +82,25 @@ reconstructed from this monitoring process. Missing values remain unknown;
 failed probes preserve the previous successful snapshot as stale. A reset time
 passing never implies zero usage or restored availability.
 
-A usage window that has not started (zero usage with no reset time, or a reset
-always one full window away) shows a start control. POST `profiles/<id>/window`
-sends one minimal model turn so the provider starts counting its windows, then
-checks usage. Claude uses the SDK helper with the Haiku alias, a one-line system
+A usage window has not started when it reports zero usage with no reset time or
+a reset always one full window away; a reported reset that already passed has
+ended. The shortest (session) window always shows a start control that opens a
+dialog: start now, or set a daily auto-start. POST `profiles/<id>/window` sends
+one minimal model turn so the provider starts counting its windows, then checks
+usage. Claude uses the SDK helper with the Haiku alias, a one-line system
 prompt, no tools, settings, hooks or MCP, and thinking disabled (about 1.3k
 input tokens). Codex starts an ephemeral app-server thread with replaced base
 instructions, the cheapest listed `*-luna` model, low effort, and tools, skills,
 plugins, multi-agent features, project documents and MCP disabled (about 4.7k
 input tokens, mostly cached). Platform sandbox and environment wrappers remain.
+
+Daily auto-start is PATCH `profiles/<id>` with
+`{"auto_start":{"time":"08:00","tolerance_minutes":60,"timezone":"Europe/Warsaw"}}`
+(`null` clears it). The time is local to the IANA time zone, so it follows
+daylight saving changes. From that time until the tolerance (1–720 minutes)
+ends, the scheduler starts the session window as soon as the latest usage
+snapshot shows it is not running, unless a start request already completed
+after that time. A failed start retries after two minutes.
 
 REST resources are under `/api/v1`: `providers`, `profiles`, `runtimes`,
 `operations`, and `health`. Profile subresources include `authentication`,
@@ -103,7 +113,8 @@ operations are persisted in SQLite; authentication must be restarted after
 service restart.
 
 Mutation requests require `Content-Type: application/json`. Profile creation
-accepts `provider` and `display_name`; PATCH accepts `enabled`; DELETE requires
+accepts `provider` and `display_name`; PATCH accepts `enabled`, `last_payment`
+and `auto_start`; DELETE requires
 `{"confirm":true}`. No arbitrary RPC, command, file or terminal interface exists.
 Claude code submission uses POST `profiles/<id>/authentication/code` with
 `{"code":"..."}` only while that selected profile awaits input. The UI is
@@ -113,7 +124,7 @@ served by Rust from embedded static assets.
 
 - `HOMESTACK_LISTEN`: default `0.0.0.0:8080`.
 - `HOMESTACK_HEARTBEAT_SECONDS`: injected by HomeStack, default 60.
-- `AGENT_ACCOUNTS_INTERVAL_SECONDS`: 60–3600, default 300.
+- `AGENT_ACCOUNTS_INTERVAL_SECONDS`: 60–3600, default 240.
 - `AGENT_ACCOUNTS_PROBE_CONCURRENCY`: 1–2, default 1.
 - `AGENT_ACCOUNTS_HOME`: absolute persistent mount, default `/home/app`.
 - `AGENT_ACCOUNTS_BUNDLED_RUNTIMES`: image seed directory, default

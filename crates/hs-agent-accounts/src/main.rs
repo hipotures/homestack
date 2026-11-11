@@ -61,7 +61,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let otlp_endpoint = telemetry::endpoint()?;
     let ctx = Context::open(
         root,
-        setting("AGENT_ACCOUNTS_INTERVAL_SECONDS", 300, 60, 3600)?,
+        setting("AGENT_ACCOUNTS_INTERVAL_SECONDS", 240, 60, 3600)?,
         setting("AGENT_ACCOUNTS_PROBE_CONCURRENCY", 1, 1, 2)? as usize,
         setting("HOMESTACK_HEARTBEAT_SECONDS", 60, 1, 3600)?,
     )?;
@@ -272,13 +272,21 @@ struct Edit {
     enabled: Option<bool>,
     #[serde(default, deserialize_with = "present")]
     last_payment: Option<Option<i64>>,
+    #[serde(default, deserialize_with = "present")]
+    auto_start: Option<Option<AutoStart>>,
 }
 /// Tells an explicit `null` (clear the value) from an omitted field.
-fn present<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Option<Option<i64>>, D::Error> {
+fn present<'de, T: Deserialize<'de>, D: serde::Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<Option<Option<T>>, D::Error> {
     Option::deserialize(d).map(Some)
 }
 async fn edit(State(c): State<Arc<Context>>, Path(id): Path<String>, Json(v): Json<Edit>) -> Result<Json<Profile>> {
     c.db.profile(&id)?;
+    let auto_start = v
+        .auto_start
+        .map(|a| a.map(AutoStart::normalized).transpose())
+        .transpose()?;
     if v.enabled.is_some() {
         c.cancel_profile(&id);
     }
@@ -290,6 +298,9 @@ async fn edit(State(c): State<Arc<Context>>, Path(id): Path<String>, Json(v): Js
     }
     if let Some(last_payment) = v.last_payment {
         p.last_payment = last_payment;
+    }
+    if let Some(auto_start) = auto_start {
+        p.auto_start = auto_start;
     }
     let resumed = v.enabled.is_some_and(|enabled| {
         p.enabled = enabled;

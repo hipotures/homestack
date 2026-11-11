@@ -104,45 +104,72 @@ function label(limit, provider) {
   return [duration, name].filter(Boolean).join(' · ') || limit.id;
 }
 // A window whose reset is unknown, or always a full window away, has not started: usage begins the clock.
-// Codex reports a started window only on a later check, so a completed start request counts as started
-// until its window would end.
+// A reported reset that already passed has ended. Codex reports a started window only on a later check,
+// so a completed start request counts as started until its window would end.
 function startedReset(limit, started) {
   const span = (limit.window_minutes || 0) * 60;
   return span && started && started + span > Date.now() / 1000 ? started + span : null;
 }
 function notStarted(limit, observed, started) {
-  if (limit.used_percent !== 0 || !limit.window_minutes || startedReset(limit, started)) return false;
-  return !limit.resets_at || limit.resets_at - observed >= limit.window_minutes * 60 - 120;
+  if (!limit.window_minutes || startedReset(limit, started)) return false;
+  if (limit.resets_at && limit.resets_at <= Date.now() / 1000) return true;
+  return limit.used_percent === 0 && (!limit.resets_at || limit.resets_at - observed >= limit.window_minutes * 60 - 120);
+}
+// While Codex still reports the pre-start state, the reset follows from the start request.
+function resetAt(profile, limit) {
+  const fresh = limit.used_percent === 0 && startedReset(limit, profile.window_started_at);
+  return fresh && (!limit.resets_at || limit.resets_at - profile.snapshot.observed_at >= limit.window_minutes * 60 - 120) ? fresh : limit.resets_at;
+}
+// The session window is the shortest one; the server's daily auto-start uses the same choice.
+function sessionLimit(profile) {
+  const limits = (profile.snapshot?.limits || []).filter(l => l.window_minutes > 0);
+  return limits.reduce((best, l) => !best || l.window_minutes < best.window_minutes ? l : best, null);
 }
 const playIcon = '<svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><path d="M2 1l7 4-7 4z" fill="currentColor"/></svg>';
 function resetLine(profile, limit) {
   const line = node('div', undefined, 'reset-line');
-  const canStart = providerCapabilities.get(profile.provider)?.includes('start_window');
-  if (canStart && notStarted(limit, profile.snapshot.observed_at, profile.window_started_at)) {
-    line.append(node('span', 'Not started', 'meta'));
+  if (notStarted(limit, profile.snapshot.observed_at, profile.window_started_at)) line.append(node('span', 'Not started', 'meta'));
+  else {
+    const reset = resetAt(profile, limit);
+    line.append(node('span', reset ? 'Resets ' + time(reset) : 'Reset time unknown', 'meta'));
+  }
+  if (providerCapabilities.get(profile.provider)?.includes('start_window') && limit === sessionLimit(profile)) {
     const name = label(limit, profile.provider);
-    const start = button(line, '', () => backgroundOperation(`/profiles/${profile.id}/window`, {}, profile.id), `window:${profile.id}`, !profile.enabled);
+    const start = button(line, '', () => backgroundOperation(`/profiles/${profile.id}/window`, {}, profile.id), `window:${profile.id}`);
     const run = start.onclick;
-    start.onclick = async () => { if (await confirmStart(name, limit.window_minutes)) await run(); };
+    start.onclick = async () => { if (await windowDialog(profile, limit)) await run(); };
     start.classList.add('icon');
     start.insertAdjacentHTML('afterbegin', playIcon);
-    start.title = `Start ${name} window`;
+    start.title = `${name} window: start or schedule`;
     start.setAttribute('aria-label', start.title);
-  } else {
-    // While Codex still reports the pre-start state, the reset follows from the start request.
-    const fresh = limit.used_percent === 0 && startedReset(limit, profile.window_started_at);
-    const reset = fresh && (!limit.resets_at || limit.resets_at - profile.snapshot.observed_at >= limit.window_minutes * 60 - 120) ? fresh : limit.resets_at;
-    line.append(node('span', reset ? 'Resets ' + time(reset) : 'Reset time unknown', 'meta'));
+    if (profile.auto_start) line.append(node('span', `Auto-start ${profile.auto_start.time}`, 'meta'));
   }
   return line;
 }
-function confirmStart(name, minutes) {
-  const dialog = $('#start-dialog');
-  setText($('#start-title'), `Start ${name} window?`);
-  setText($('#start-reset'), time(Math.floor(Date.now() / 1000) + minutes * 60));
+const browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+let windowProfile = null;
+/** Resolves true when the owner chose to start the window now. */
+function windowDialog(profile, limit) {
+  windowProfile = profile;
+  const dialog = $('#window-dialog'), name = label(limit, profile.provider);
+  const idle = notStarted(limit, profile.snapshot.observed_at, profile.window_started_at), reset = resetAt(profile, limit);
+  setText($('#window-title'), `${name[0].toUpperCase()}${name.slice(1)} window`);
+  setText($('#window-status'), !profile.enabled ? 'Profile disabled' : idle ? 'Not started' : reset ? `Running · resets ${time(reset)}` : 'Running');
+  setText($('#window-reset'), time(Math.floor(Date.now() / 1000) + limit.window_minutes * 60));
+  $('#window-start').disabled = !idle || !profile.enabled;
+  $('#auto-time').value = profile.auto_start?.time || '';
+  $('#auto-tolerance').value = profile.auto_start?.tolerance_minutes ?? 60;
+  $('#auto-clear').disabled = !profile.auto_start;
+  setText($('#auto-zone'), `Time zone: ${browserZone}`);
   dialog.returnValue = '';
   dialog.showModal();
   return new Promise(resolve => dialog.addEventListener('close', () => resolve(dialog.returnValue === 'start'), { once: true }));
+}
+async function saveAutoStart(value) {
+  try {
+    await api(`/profiles/${windowProfile.id}`, 'PATCH', { auto_start: value });
+    $('#window-dialog').close(); await refresh();
+  } catch (error) { notice(error); }
 }
 async function details(profile) {
   const content = $('#detail-content');
@@ -375,6 +402,16 @@ $('#payment-next').onclick = () => {
   if (value != null) $('#payment-at').value = localInput(addMonths(value, 1));
 };
 $('#payment-clear').onclick = () => savePayment(null);
+$('#window-start').onclick = () => $('#window-dialog').close('start');
+$('#auto-time').oninput = () => $('#auto-time').setCustomValidity('');
+$('#window-form').onsubmit = event => {
+  event.preventDefault();
+  const m = $('#auto-time').value.trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!m || +m[1] > 23 || +m[2] > 59) { $('#auto-time').setCustomValidity('Use HH:MM, for example 08:00'); $('#auto-time').reportValidity(); return; }
+  if (!$('#auto-tolerance').reportValidity()) return;
+  saveAutoStart({ time: `${pad(+m[1])}:${m[2]}`, tolerance_minutes: +$('#auto-tolerance').value, timezone: browserZone });
+};
+$('#auto-clear').onclick = () => saveAutoStart(null);
 $('#add').onclick = () => $('#add-dialog').showModal();
 document.querySelectorAll('[data-close]').forEach(button => { button.onclick = () => button.closest('dialog').close(); });
 $('#create').onsubmit = async event => {

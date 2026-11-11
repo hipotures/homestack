@@ -51,6 +51,91 @@ pub struct Snapshot {
     pub reset_credits: Option<Value>,
 }
 
+/// The session window: the shortest window the provider reports.
+fn session_limit(s: &Snapshot) -> Option<(&Limit, i64)> {
+    s.limits
+        .iter()
+        .filter_map(|l| l.window_minutes.filter(|m| *m > 0).map(|m| (l, m * 60)))
+        .min_by_key(|(_, span)| *span)
+}
+
+/// Whether the session window is not running, as the dashboard decides it: a start request
+/// counts until its window would end; otherwise zero usage with no reset, or a reset a full
+/// window away, has not started, and a reported reset already passed has ended.
+pub fn window_idle(s: &Snapshot, started: Option<i64>, now: i64) -> bool {
+    let Some((l, span)) = session_limit(s) else {
+        return false;
+    };
+    if started.is_some_and(|t| t + span > now) {
+        return false;
+    }
+    if l.resets_at.is_some_and(|t| t <= now) {
+        return true;
+    }
+    l.used_percent == Some(0.0) && l.resets_at.is_none_or(|t| t - s.observed_at >= span - 120)
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AutoStart {
+    /// Local `HH:MM` in `timezone`.
+    pub time: String,
+    /// How long after `time` a start may still happen.
+    pub tolerance_minutes: i64,
+    /// IANA time zone of the owner's browser.
+    pub timezone: String,
+}
+impl AutoStart {
+    fn parts(&self) -> Option<(chrono_tz::Tz, u32, u32)> {
+        let (h, m) = self.time.split_once(':')?;
+        let digits = |s: &str, len: std::ops::RangeInclusive<usize>| {
+            len.contains(&s.len()) && s.bytes().all(|b| b.is_ascii_digit())
+        };
+        (digits(h, 1..=2) && digits(m, 2..=2)).then_some(())?;
+        let (h, m): (u32, u32) = (h.parse().ok()?, m.parse().ok()?);
+        (h < 24 && m < 60).then_some(())?;
+        Some((self.timezone.parse().ok()?, h, m))
+    }
+    pub fn normalized(mut self) -> Result<Self> {
+        let (_, h, m) = self
+            .parts()
+            .ok_or_else(|| Failure::new("invalid_input", "Auto-start needs a HH:MM time and a known time zone"))?;
+        if !(1..=720).contains(&self.tolerance_minutes) {
+            return Err(Failure::new("invalid_input", "Tolerance must be 1–720 minutes"));
+        }
+        self.time = format!("{h:02}:{m:02}");
+        Ok(self)
+    }
+    /// The latest scheduled moment at or before `now`, as Unix seconds.
+    pub fn latest(&self, now: i64) -> Option<i64> {
+        use chrono::TimeZone;
+        let (tz, h, m) = self.parts()?;
+        let today = chrono::DateTime::from_timestamp(now, 0)?
+            .with_timezone(&tz)
+            .date_naive();
+        let at = |date: chrono::NaiveDate| {
+            tz.from_local_datetime(&date.and_hms_opt(h, m, 0)?)
+                .earliest()
+                .map(|t| t.timestamp())
+        };
+        match at(today) {
+            Some(t) if t <= now => Some(t),
+            _ => at(today.pred_opt()?),
+        }
+    }
+    /// Due within the tolerance after the scheduled time, once per scheduled time, while the
+    /// session window is not running.
+    pub fn due(&self, p: &Profile, now: i64) -> bool {
+        self.latest(now).is_some_and(|at| {
+            now - at < self.tolerance_minutes * 60
+                && p.window_started_at.is_none_or(|t| t < at)
+                && p.snapshot
+                    .as_ref()
+                    .is_some_and(|s| window_idle(s, p.window_started_at, now))
+        })
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Profile {
     pub id: String,
@@ -74,6 +159,9 @@ pub struct Profile {
     /// Owner-entered time of the latest subscription payment, for providers that do not report a billing period.
     #[serde(default)]
     pub last_payment: Option<i64>,
+    /// Owner-chosen daily time to start the shortest usage window when it is not running.
+    #[serde(default)]
+    pub auto_start: Option<AutoStart>,
     pub snapshot: Option<Snapshot>,
     #[serde(default)]
     pub notifications: Vec<crate::telegram::Notification>,

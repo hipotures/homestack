@@ -5,7 +5,7 @@ inputs:
     label: Usage check interval
     description: Seconds between enabled profile usage checks.
     type: integer
-    default: 300
+    default: 240
     min: 60
     max: 3600
     target:
