@@ -87,15 +87,14 @@ The image is `ghcr.io/hipotures/homestack-metrics:X.Y.Z`. A static amd64/musl
 Proxmox-compatible hosts/resolver layout; no frontend, extra daemon, runtime
 package installation, certificates or persistent volume is needed.
 
-Build through the repository wrapper:
+Build the image from the repository root; it compiles the static binary inside:
 
 ```sh
-RUSTFLAGS='-C target-feature=+crt-static' python3 scripts/cargo.py build --release --locked --target x86_64-unknown-linux-musl -p hs-metrics --bin homestack-metrics
+podman build -f deploy/metrics/Containerfile -t IMAGE .
 ```
 
-Copy the binary into a local image context and build using
-`deploy/metrics/Containerfile`. For focused image admission, use the official MCP
-Python SDK rather than a handwritten protocol client:
+For focused image admission, use the official MCP Python SDK rather than a
+handwritten protocol client:
 
 ```sh
 uv run --no-project --with mcp==2.3.0 python deploy/metrics/verify-image.py --runtime podman IMAGE

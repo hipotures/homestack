@@ -88,35 +88,15 @@ jobs:
           VERSION: ${{ steps.tag.outputs.tag }}
           EVENT: ${{ github.event_name }}
         run: scripts/image-admission.sh "$IMAGE" "$REVISION" "$VERSION" "$EVENT"
-      - name: Install Rust 1.99.0 for musl
-        if: steps.publication.outputs.publish == 'true'
-        run: |
-          sudo apt-get install -y --no-install-recommends musl-tools
-          rustup toolchain install 1.99.0 --profile minimal --target x86_64-unknown-linux-musl
-          rustup default 1.99.0
-      - uses: Swatinem/rust-cache@v2.9.2
-        if: steps.publication.outputs.publish == 'true'
-        with:
-          key: musl-server
-      - name: Build the server
-        if: steps.publication.outputs.publish == 'true'
-        env:
-          RUSTFLAGS: "-C target-feature=+crt-static"
-        run: |
-          python3 scripts/cargo.py build --release --locked --target x86_64-unknown-linux-musl -p hs-server --bin homestack-server
-          ! readelf -l target/x86_64-unknown-linux-musl/release/homestack-server | grep -q INTERP
-          mkdir -p image
-          cp target/x86_64-unknown-linux-musl/release/homestack-server image/
-          cp deploy/lxc/Caddyfile image/
-          cp -r deploy/lxc/service image/service
       - uses: docker/build-push-action@v6.18.0
         if: steps.publication.outputs.publish == 'true'
         with:
           # PVE pulls one deployable amd64 manifest, without an attestation index.
           platforms: linux/amd64
           provenance: false
-          context: image
-          file: deploy/image/Containerfile
+          context: .
+          file: Containerfile
+          target: node
           push: true
           tags: ghcr.io/hipotures/homestack-server:${{ steps.tag.outputs.tag }}
           labels: |
@@ -354,33 +334,14 @@ jobs:
           VERSION: ${{ steps.tag.outputs.tag }}
           EVENT: ${{ github.event_name }}
         run: scripts/image-admission.sh "$IMAGE" "$REVISION" "$VERSION" "$EVENT"
-      - name: Install Rust 1.99.0 for musl
-        if: steps.publication.outputs.publish == 'true'
-        run: |
-          sudo apt-get install -y --no-install-recommends musl-tools
-          rustup toolchain install 1.99.0 --profile minimal --target x86_64-unknown-linux-musl
-          rustup default 1.99.0
-      - uses: Swatinem/rust-cache@v2.9.2
-        if: steps.publication.outputs.publish == 'true'
-        with:
-          key: musl-metrics
-      - name: Build the server
-        if: steps.publication.outputs.publish == 'true'
-        env:
-          RUSTFLAGS: "-C target-feature=+crt-static"
-          HOMESTACK_METRICS_VERSION: ${{ steps.tag.outputs.tag }}
-        run: |
-          python3 scripts/cargo.py build --release --locked --target x86_64-unknown-linux-musl -p hs-metrics --bin homestack-metrics
-          ! readelf -l target/x86_64-unknown-linux-musl/release/homestack-metrics | grep -q INTERP
-          mkdir -p image
-          cp target/x86_64-unknown-linux-musl/release/homestack-metrics image/
       - uses: docker/build-push-action@v6.18.0
         if: steps.publication.outputs.publish == 'true'
         with:
           platforms: linux/amd64
           provenance: false
-          context: image
+          context: .
           file: deploy/metrics/Containerfile
+          build-args: HOMESTACK_METRICS_VERSION=${{ steps.tag.outputs.tag }}
           load: true
           tags: ghcr.io/hipotures/homestack-metrics:${{ steps.tag.outputs.tag }}
           labels: |
