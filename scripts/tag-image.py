@@ -33,13 +33,18 @@ def main():
             raise ValueError(f"HEAD already has a {args.service} image release")
         versions = [tuple(map(int, match.groups())) for tag in tags if (match := version_pattern.fullmatch(tag))]
         if args.service == "pangolin":
-            # Preserve the original Pangolin independent release sequence.
+            # The image takes the pinned CLI version once; later HomeStack-only
+            # releases of the same CLI take the next free patch.
             containerfile = Path(__file__).resolve().parent.parent / "deploy/pangolin-site/Containerfile"
             pinned = re.search(r"^ARG PANGOLIN_CLI_VERSION=(\d+)\.(\d+)\.(\d+)$", containerfile.read_text(), re.MULTILINE)
             if pinned is None:
                 raise ValueError("Pinned Pangolin CLI version is missing")
-            latest = max(versions) if versions else tuple(map(int, pinned.groups()))
-            version = f"{latest[0]}.{latest[1]}.{latest[2] + 1}"
+            pinned = tuple(map(int, pinned.groups()))
+            latest = max(versions, default=None)
+            if latest is None or pinned > latest:
+                version = "{}.{}.{}".format(*pinned)
+            else:
+                version = f"{latest[0]}.{latest[1]}.{latest[2] + 1}"
         else:
             latest = max(versions) if versions else None
             version = f"{latest[0]}.{latest[1]}.{latest[2] + 1}" if latest else "0.1.0"

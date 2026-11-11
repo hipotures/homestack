@@ -90,8 +90,8 @@ This future system is not yet specified. Do not build it, redesign E2E, create p
 
 # Pangolin image releases
 
-- The Pangolin Site image has an independent SemVer line: annotated Git tag `pangolin-X.Y.Z` publishes `ghcr.io/hipotures/homestack-pangolin-site:X.Y.Z` as a single `linux/amd64` image. The pinned upstream CLI version is a build input, not the image version.
-- After building, verifying, committing and pushing an image-affecting change, run `python3 scripts/tag-image.py` to automatically publish its next patch release. The script requires a clean, already pushed HEAD and refuses a HEAD already released. Never choose version numbers manually or replace an existing release.
+- Annotated Git tag `pangolin-X.Y.Z` publishes `ghcr.io/hipotures/homestack-pangolin-site:X.Y.Z` as a single `linux/amd64` image. The image version follows the pinned upstream Pangolin CLI version: a release with a newly pinned CLI takes exactly that version, and later HomeStack-only releases take the next free patch.
+- After building, verifying, committing and pushing an image-affecting change, run `python3 scripts/tag-image.py` to automatically publish its release. The script requires a clean, already pushed HEAD and refuses a HEAD already released. Never choose version numbers manually or replace an existing release.
 - Changes confined to manifests, documentation, tests, CI or development tooling need no image release. Ordinary pushes run checks only; a manual workflow run publishes a `dev-<commit>` image.
 
 # Collector image releases
