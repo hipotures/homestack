@@ -323,7 +323,8 @@
       if(enabledEvents){
         let wasFull=false;
         for(const t of [...new Set([...used.keys(),...exhausted.keys()])].sort((a,b)=>a-b)){
-          const full=(used.get(t)??0)>=100||exhausted.get(t)===1;
+          // Agent Accounts reports exhaustion explicitly; Claude's weekly 100% stays usable until a turn is rejected.
+          const full=exhausted.has(t)?exhausted.get(t)===1:(used.get(t)??0)>=100;
           // A bucket can retain pre-reset exhaustion alongside the next reset time.
           // Only observed recovery followed by exhaustion starts another episode.
           if(full&&!wasFull&&t>=range.start&&t<=range.end){

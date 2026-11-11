@@ -38,21 +38,46 @@ async function usage(binary) {
     rate_limits: usage.rate_limits,
   };
 }
-async function start(binary) {
-  // One minimal turn opens the subscription usage window: the default system prompt, tools,
-  // settings and hooks are replaced or disabled so the request stays as small as possible.
+// One minimal turn: the default system prompt, tools, settings and hooks are replaced or
+// disabled so the request stays as small as possible.
+async function turn(binary) {
   q = query({
     prompt: 'hi',
     options: { ...isolated(binary), systemPrompt: 'Reply with one word.', model: 'haiku', thinking: { type: 'disabled' }, maxTurns: 1 },
   });
   let done = null;
-  for await (const message of q) if (message.type === 'result') done = message;
-  if (!done || done.subtype !== 'success' || done.is_error) throw Error(String(done?.result || 'start failed'));
-  const u = done.usage || {};
-  return { tokens: {
-    input: u.input_tokens ?? null, cache_creation_input: u.cache_creation_input_tokens ?? null,
-    cache_read_input: u.cache_read_input_tokens ?? null, output: u.output_tokens ?? null,
-  }};
+  const rejected = new Set();
+  try {
+    for await (const message of q) {
+      if (message.type === 'result') done = message;
+      const info = message.type === 'rate_limit_event' ? message.rate_limit_info : null;
+      if (info?.status === 'rejected' && info.rateLimitType) rejected.add(info.rateLimitType);
+    }
+  } catch (error) {
+    if (!rejected.size) throw error;
+  }
+  const u = done?.usage || {};
+  return {
+    succeeded: !!done && done.subtype === 'success' && !done.is_error,
+    error: String(done?.result || 'turn failed'),
+    rejected: [...rejected],
+    tokens: {
+      input: u.input_tokens ?? null, cache_creation_input: u.cache_creation_input_tokens ?? null,
+      cache_read_input: u.cache_read_input_tokens ?? null, output: u.output_tokens ?? null,
+    },
+  };
+}
+// Opens the subscription usage window.
+async function start(binary) {
+  const result = await turn(binary);
+  if (!result.succeeded) throw Error(result.error);
+  return { tokens: result.tokens };
+}
+// Tells whether Claude still serves requests: a completed turn, or the limits that rejected it.
+async function check(binary) {
+  const result = await turn(binary);
+  if (!result.succeeded && !result.rejected.length) throw Error(result.error);
+  return { rejected: result.rejected, tokens: result.tokens };
 }
 let id = null;
 let mode = 'usage';
@@ -63,9 +88,9 @@ try {
   input.close();
   const request = JSON.parse(line);
   mode = request.mode ?? 'usage';
-  if (request.version !== 1 || typeof request.id !== 'string' || typeof request.binary !== 'string' || !request.binary.startsWith('/') || !['usage', 'start'].includes(mode)) throw Error('protocol');
+  if (request.version !== 1 || typeof request.id !== 'string' || typeof request.binary !== 'string' || !request.binary.startsWith('/') || !['usage', 'start', 'check'].includes(mode)) throw Error('protocol');
   id = request.id;
-  const data = mode === 'start' ? await start(request.binary) : await usage(request.binary);
+  const data = await { usage, start, check }[mode](request.binary);
   result = { version: 1, id, ok: true, observed_at: Math.floor(Date.now() / 1000), data };
 } catch (error) {
   const message = String(error?.message || '').toLowerCase();

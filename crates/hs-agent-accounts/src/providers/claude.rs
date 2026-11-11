@@ -56,7 +56,8 @@ fn window(id: &str, label: &str, minutes: Option<i64>, v: &Value, model: Option<
         exhausted: None,
     }
 }
-/// Runs one SDK helper request: `usage` reads quota windows without a model turn, `start` sends one minimal turn.
+/// Runs one SDK helper request: `usage` reads quota windows without a model turn; `start` and
+/// `check` send one minimal turn, `check` also reporting the limits that rejected it.
 async fn helper(ctx: &Context, p: &Profile, binary: &Path, mode: &str) -> Result<Value> {
     let root = process::prepare(&ctx.root, &p.id)?;
     let mut command = process::command(Path::new("/usr/bin/node"), &root, "claude");
@@ -181,6 +182,33 @@ impl Provider for Claude {
                 }
                 if limits.is_empty() {
                     return Err(Failure::new("provider_api_failure", "Claude returned no quota windows"));
+                }
+                // The weekly window reads 100% well before Claude rejects requests, so only a
+                // rejected minimal turn confirms it; a confirmation holds until that reset.
+                if let Some(week) = limits
+                    .iter_mut()
+                    .find(|l| l.id == "seven_day" && l.used_percent.is_some_and(|v| v >= 100.0))
+                {
+                    let confirmed = p
+                        .snapshot
+                        .as_ref()
+                        .and_then(|s| s.limits.iter().find(|l| l.id == "seven_day"))
+                        .is_some_and(|old| {
+                            old.exhausted == Some(true)
+                                && old
+                                    .resets_at
+                                    .zip(week.resets_at)
+                                    .is_some_and(|(a, b)| (a - b).abs() <= 120)
+                        });
+                    week.exhausted = if confirmed {
+                        Some(true)
+                    } else {
+                        helper(ctx, p, binary, "check").await.ok().and_then(|r| {
+                            r["data"]["rejected"]
+                                .as_array()
+                                .map(|kinds| kinds.iter().any(|k| k == "seven_day"))
+                        })
+                    };
                 }
                 let observed = result["observed_at"]
                     .as_i64()

@@ -94,6 +94,13 @@ instructions, the cheapest listed `*-luna` model, low effort, and tools, skills,
 plugins, multi-agent features, project documents and MCP disabled (about 4.7k
 input tokens, mostly cached). Platform sandbox and environment wrappers remain.
 
+Claude's 7-day window can read 100% for a long time while requests still
+succeed. While it reads 100%, every usage check also sends the same minimal
+turn: a turn rejected for `seven_day` marks the window exhausted until that
+reset without further turns; a completed turn marks it not exhausted. A failed
+check leaves exhaustion unknown, and readers then fall back to 100% usage. The
+5-hour window keeps the 100% rule.
+
 Daily auto-start is PATCH `profiles/<id>` with
 `{"auto_start":{"time":"08:00","tolerance_minutes":60,"timezone":"Europe/Warsaw"}}`
 (`null` clears it). The time is local to the IANA time zone, so it follows
