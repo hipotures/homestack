@@ -4,21 +4,21 @@
 # credential through `pct exec` standard input (homestack-site-credential).
 # Built and published by .github/workflows/ci.yml for tags pangolin-X.Y.Z.
 FROM docker.io/library/golang:1.27.1-alpine3.24 AS build
-ARG PANGOLIN_CLI_VERSION=0.18.1
-ARG PANGOLIN_CLI_SOURCE_SHA256=568fcbf62a1c485d8cec617c635ae5769ff5d6729bcf412a7f0d13efb3d498ad
+ARG PANGOLIN_CLI_VERSION=0.21.0
+ARG PANGOLIN_CLI_SOURCE_SHA256=c1c0740a3ae9bcbc355f44d6cd743c9cb8e555a9be30b50be2be666c39768325
 RUN apk add --no-cache python3
 WORKDIR /src
 RUN wget -q -O /tmp/cli.tar.gz "https://codeload.github.com/fosrl/cli/tar.gz/refs/tags/${PANGOLIN_CLI_VERSION}" \
     && echo "${PANGOLIN_CLI_SOURCE_SHA256}  /tmp/cli.tar.gz" | sha256sum -c - \
     && tar -xzf /tmp/cli.tar.gz --strip-components=1 \
     && go mod download \
-    && cp -a /go/pkg/mod/github.com/fosrl/newt@v1.18.1 /newt \
+    && cp -a /go/pkg/mod/github.com/fosrl/newt@v1.20.0 /newt \
     && chmod -R u+w /newt \
     && go mod edit -replace github.com/fosrl/newt=/newt
 COPY prepare-source.py homestack_*.go /extension/
 RUN python3 /extension/prepare-source.py /src /newt \
     && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
-       -ldflags "-s -w -X github.com/fosrl/cli/internal/version.Version=${PANGOLIN_CLI_VERSION} -X github.com/fosrl/cli/internal/version.NewtVersionOverride=1.18.1" \
+       -ldflags "-s -w -X github.com/fosrl/cli/internal/version.Version=${PANGOLIN_CLI_VERSION} -X github.com/fosrl/cli/internal/version.NewtVersionOverride=1.20.0" \
        -o /pangolin-cli .
 
 FROM docker.io/library/alpine:3.24.2

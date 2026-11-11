@@ -9,8 +9,8 @@ endpoints to that same process and a callback to Newt's successful tunnel
 probes; it refuses unexpected upstream source. There is no telemetry daemon.
 
 The upstream CLI and Newt source remain available at
-<https://github.com/fosrl/cli/tree/0.18.1> and
-<https://github.com/fosrl/newt/tree/v1.18.1>. The exact HomeStack additions and
+<https://github.com/fosrl/cli/tree/0.21.0> and
+<https://github.com/fosrl/newt/tree/v1.20.0>. The exact HomeStack additions and
 build recipe are in this directory. The compiled modifications use AGPL-3.0;
 the upstream license is included in the image at
 `/usr/share/licenses/pangolin-cli/LICENSE`.
