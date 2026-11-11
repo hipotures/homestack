@@ -281,6 +281,25 @@ pub async fn verify_version(ctx: &Context, provider: &str, path: &Path, selected
 }
 
 impl Context {
+    pub async fn runtime_scheduler(self: Arc<Self>) {
+        let mut timer = tokio::time::interval(Duration::from_secs(3600));
+        timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {_=self.shutdown.cancelled()=>break,_=timer.tick()=>{}};
+            for provider in &self.providers {
+                if provider.capabilities().contains(&"runtime_updates")
+                    && let Err(error) = self.runtime_operation(provider.id(), RuntimeAction::Check)
+                {
+                    eprintln!(
+                        "Runtime version check for {} could not start: {}",
+                        provider.id(),
+                        error.message
+                    );
+                }
+            }
+        }
+    }
+
     pub fn runtime_operation(self: &Arc<Self>, provider: &str, action: RuntimeAction) -> Result<Operation> {
         let (kind, selected, rollback) = match action {
             RuntimeAction::Check => ("update_check", None, false),
@@ -450,6 +469,11 @@ impl Context {
             }).await;
             if stage.exists() {
                 let _ = tokio::fs::remove_dir_all(&stage).await;
+            }
+            if let Err(error) = &result
+                && selected.is_none()
+            {
+                eprintln!("Runtime version check for {provider} failed: {}", error.message);
             }
             if let Err(e) = &result
                 && selected.is_some()

@@ -223,8 +223,14 @@ reported version. A missing or mismatched pin is a startup error; image refresh
 never silently chooses the image's newer bundled version. A per-home file lock
 prevents two service processes from sharing credentials and running probes.
 
-Open **Provider runtimes**, click **Check available version**, then **Upgrade**
-when a newer stable version is available. Checking versions installs nothing.
+The service checks official stable releases at startup and every hour, even
+when no browser is open. **Provider runtimes** displays the latest discovered
+version and highlights it when newer than the active pin. The open page refreshes
+within its normal 15-second polling cycle. **Check available version** also
+checks on demand. Checking versions installs nothing; select **Upgrade** to
+activate a newer release. A busy provider skips that automatic check until the
+next hourly cycle. Failed checks are logged and retried in the next cycle;
+the last successful version and check timestamp remain visible.
 An upgrade to a new version stages an official versioned musl download, validates its official
 SHA-256 and reported version, and performs an account-limits probe using one
 enabled authenticated profile. Only then does one SQLite transaction activate
