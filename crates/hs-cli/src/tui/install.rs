@@ -221,6 +221,12 @@ pub enum Event {
         sections: Vec<(String, Vec<String>)>,
         problems: Vec<String>,
     },
+    /// Service review offers both the execution delta and the full plan.
+    ReviewedDelta {
+        sections: Vec<(String, Vec<String>)>,
+        changes: Vec<(String, Vec<String>)>,
+        problems: Vec<String>,
+    },
     /// What is being waited for now (connected, reading the cluster, …).
     Busy(String),
     /// One more thing done in the run.
@@ -326,6 +332,8 @@ pub struct Install {
     /// The entry typed after `+` in a list's box.
     pub adding: Option<String>,
     pub sections: Vec<(String, Vec<String>)>,
+    pub changes: Option<Vec<(String, Vec<String>)>>,
+    pub full_plan: bool,
     pub problems: Vec<String>,
     pub reviewed: bool,
     pub scroll: usize,
@@ -385,6 +393,8 @@ impl Install {
             adding: None,
             cursor: 0,
             sections: Vec::new(),
+            changes: None,
+            full_plan: false,
             problems: Vec::new(),
             reviewed: false,
             scroll: 0,
@@ -489,7 +499,7 @@ impl Install {
     pub fn event(&mut self, event: Event) {
         if self.cancelling {
             match event {
-                Event::Busy(_) | Event::Line(_) | Event::Reviewed { .. } => {}
+                Event::Busy(_) | Event::Line(_) | Event::Reviewed { .. } | Event::ReviewedDelta { .. } => {}
                 Event::Connected(_) | Event::PangolinDomains(_) | Event::Failed(_) | Event::Done { .. } => {
                     self.cancelling = false;
                     self.busy = None;
@@ -534,7 +544,21 @@ impl Install {
                     self.stage = Stage::Access;
                 }
             }
+            Event::ReviewedDelta {
+                sections,
+                changes,
+                problems,
+            } => {
+                self.sections = sections;
+                self.changes = Some(changes);
+                self.full_plan = false;
+                self.problems = problems;
+                self.reviewed = true;
+                self.scroll = 0;
+            }
             Event::Reviewed { sections, problems } => {
+                self.changes = None;
+                self.full_plan = false;
                 self.sections = sections;
                 self.problems = problems;
                 self.reviewed = true;
@@ -1146,9 +1170,22 @@ impl Install {
         (false, None)
     }
 
+    pub fn review_sections(&self) -> &[(String, Vec<String>)] {
+        if self.full_plan {
+            &self.sections
+        } else {
+            self.changes.as_deref().unwrap_or(&self.sections)
+        }
+    }
+
     /// The review: a letter applies it (D deploy, I install), never Enter;
     /// a removal is confirmed with Del again.
     fn review_key(&mut self, code: KeyCode) -> (bool, Option<Request>) {
+        if matches!(code, KeyCode::Char('v' | 'V')) && self.changes.is_some() {
+            self.full_plan = !self.full_plan;
+            self.scroll = 0;
+            return (false, None);
+        }
         let ready = self.reviewed && self.problems.is_empty();
         let apply = |install: &mut Self| {
             install.stage = Stage::Run;

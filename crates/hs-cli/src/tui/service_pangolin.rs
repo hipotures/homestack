@@ -1037,6 +1037,69 @@ impl Plan {
         self.previous.as_ref().is_some_and(|target| target.body == self.body)
     }
 
+    /// Only mutations, derived from the same reviewed state that Apply uses.
+    pub(super) fn delta_lines(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        if self.resource.is_none() {
+            lines.push(format!(
+                "Public Resource: missing → CREATE https://{} (Pangolin HTTPS and login)",
+                self.domain
+            ));
+        }
+        if !self.keep_public && !self.target_unchanged() {
+            match &self.previous {
+                None => {
+                    lines.push(format!(
+                        "Public target: missing → http://{}:{} via {} (ID {})",
+                        self.body["ip"].as_str().unwrap_or_default(),
+                        self.body["port"],
+                        self.site.name,
+                        self.site.id
+                    ));
+                    lines.push(format!(
+                        "Health check: GET http://{}:{}{} → expected HTTP {}",
+                        self.body["hcHostname"].as_str().unwrap_or_default(),
+                        self.body["hcPort"],
+                        self.body["hcPath"].as_str().unwrap_or_default(),
+                        self.body["hcStatus"]
+                    ));
+                }
+                Some(previous) => {
+                    lines.push(format!("Public target {}: UPDATE", previous.id));
+                    if let Some(body) = self.body.as_object() {
+                        for (field, after) in body {
+                            let before = &previous.body[field];
+                            if before != after {
+                                lines.push(format!(
+                                    "  {}: {} → {}",
+                                    target_field_label(field),
+                                    delta_value(before),
+                                    delta_value(after)
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(private) = &self.private {
+            if private.existing.is_none() {
+                lines.push(format!("Private Resource: missing → CREATE https://{}", self.domain));
+                lines.extend(private.lines(&self.domain).into_iter().skip(1));
+            }
+        }
+        lines.extend(
+            self.bypass
+                .missing
+                .iter()
+                .map(|path| format!("Public login bypass {path}: missing → ADD")),
+        );
+        if self.bypass.enable {
+            lines.push("Public rule evaluation: disabled → enabled".into());
+        }
+        lines
+    }
+
     pub(super) fn lines(&self) -> Vec<String> {
         let mut lines = vec![
             format!("Public URL: https://{}", self.domain),
@@ -1098,6 +1161,40 @@ impl Plan {
             "Other access policies of an existing resource are preserved; the service itself is not touched.".to_owned()
         });
         lines
+    }
+}
+
+fn delta_value(value: &Value) -> String {
+    match value {
+        Value::Null => "not set".into(),
+        Value::String(value) => value.clone(),
+        _ => value.to_string(),
+    }
+}
+
+fn target_field_label(field: &str) -> &str {
+    match field {
+        "ip" => "Backend hostname",
+        "siteId" => "Site ID",
+        "port" => "Backend port",
+        "method" => "Backend protocol",
+        "mode" => "Target mode",
+        "enabled" => "Target enabled",
+        "hcEnabled" => "Health check enabled",
+        "hcHostname" => "Health check hostname",
+        "hcPort" => "Health check port",
+        "hcScheme" => "Health check protocol",
+        "hcMode" => "Health check mode",
+        "hcPath" => "Health check path",
+        "hcMethod" => "Health check HTTP method",
+        "hcStatus" => "Expected HTTP status",
+        "hcInterval" => "Healthy check interval (seconds)",
+        "hcUnhealthyInterval" => "Unhealthy check interval (seconds)",
+        "hcTimeout" => "Health check timeout (seconds)",
+        "hcFollowRedirects" => "Follow health check redirects",
+        "hcHealthyThreshold" => "Healthy threshold",
+        "hcUnhealthyThreshold" => "Unhealthy threshold",
+        _ => field,
     }
 }
 

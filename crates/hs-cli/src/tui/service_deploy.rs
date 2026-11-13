@@ -110,6 +110,48 @@ struct Changes {
 /// The review's sections, its problems and what applying it does.
 type Review = (Vec<(String, Vec<String>)>, Vec<String>, Reviewed);
 
+/// Keep the display delta separate from the reviewed operations sent to Apply.
+fn delta_sections(sections: &[(String, Vec<String>)], reviewed: &Reviewed) -> Vec<(String, Vec<String>)> {
+    let Reviewed::Change(plan) = reviewed else {
+        return sections.to_vec();
+    };
+    let mut changes: Vec<_> = sections
+        .iter()
+        .filter(|(title, _)| !["Application", "Pangolin attachment", "Public DNS"].contains(&title.as_str()))
+        .cloned()
+        .collect();
+    if let Some(attach) = &plan.attach {
+        let lines = attach.delta_lines();
+        if !lines.is_empty() {
+            changes.push(("Pangolin".into(), lines));
+        }
+    }
+    if let Some(public_dns::Plan::Managed(record)) = &plan.record {
+        changes.push((
+            "Public DNS".into(),
+            vec![format!(
+                "{}: {} → CNAME {} ({})",
+                record.name(),
+                if record.exists {
+                    "record awaiting publication"
+                } else {
+                    "missing"
+                },
+                record.target,
+                record.provider_name()
+            )],
+        ));
+    }
+    if changes.is_empty() {
+        changes.push(if plan.problems.is_empty() {
+            ("No changes".into(), vec!["Nothing to create, update, restart or remove. Existing application, Pangolin resources and DNS stay unchanged.".into()])
+        } else {
+            ("No changes planned".into(), vec!["Resolve the problems above, then generate a new review.".into()])
+        });
+    }
+    changes
+}
+
 /// What the operator left in the settings.
 struct Chosen {
     selected: Vec<u32>,
@@ -188,7 +230,12 @@ pub(super) fn work(setup: &Setup, commands: &Receiver<Command>, tell: &(dyn Fn(E
                 }
                 tell(Event::Busy("Checking the plan against the cluster".to_owned()));
                 let (sections, problems, reviewed) = review(setup, &source, s, &answers, tell);
-                tell(Event::Reviewed { sections, problems });
+                let changes = delta_sections(&sections, &reviewed);
+                tell(Event::ReviewedDelta {
+                    sections,
+                    changes,
+                    problems,
+                });
                 s.reviewed = Some(reviewed);
             }
             Command::Remove { answers } => {

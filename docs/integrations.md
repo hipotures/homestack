@@ -624,8 +624,15 @@ HomeStack checks organization, identity and current availability, but does not
 actively probe the backend from each connector. Existing offline failover Sites
 are retained when another associated Site is online.
 
+Service review opens in **Changes to apply** mode. The **V full plan** button
+(or V key) switches to the full configuration; **V changes only** returns to the
+delta. The delta omits unchanged application, public routing and DNS sections,
+shows creations and changed target fields as before → after, and shows a short
+**No changes** message for a correct existing pair. Switching views changes no
+reviewed operation and sends no API request.
+
 For an existing Public-only service, select the current instance and keep its
-image, reinstall, application and resource settings unchanged. Review shows
+image, reinstall, application and resource settings unchanged. Full plan shows
 **Public Resource: KEEP**, **Private Resource: CREATE**, the hostname, destination,
 Sites, managed TLS and Admin access. Existing public targets, health checks,
 policies and DNS are not normalized. Missing public DNS or incompatible resource

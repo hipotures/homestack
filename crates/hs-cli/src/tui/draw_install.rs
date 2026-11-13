@@ -187,6 +187,16 @@ pub(super) fn buttons(install: &Install) -> Vec<Control> {
                     Control::named("DEL", "remove", KeyCode::Delete).enabled(ready),
                     back,
                 ],
+                Mode::Service if install.changes.is_some() => vec![
+                    scroll,
+                    Control::named(
+                        "V",
+                        if install.full_plan { "changes only" } else { "full plan" },
+                        KeyCode::Char('v'),
+                    ),
+                    Control::named("D", "deploy", KeyCode::Char('d')).enabled(ready),
+                    back,
+                ],
                 Mode::Service | Mode::Sites => vec![
                     scroll,
                     Control::named("D", "deploy", KeyCode::Char('d')).enabled(ready),
@@ -1029,7 +1039,19 @@ fn review(buf: &mut Buffer, inner: Rect, app: &App, install: &Install) {
         }
         lines.push((String::new(), text));
     }
-    for (heading, body) in &install.sections {
+    if install.changes.is_some() {
+        lines.push((
+            if install.full_plan {
+                "Full plan"
+            } else {
+                "Changes to apply"
+            }
+            .into(),
+            bold.fg(palette.focus),
+        ));
+        lines.push((String::new(), text));
+    }
+    for (heading, body) in install.review_sections() {
         lines.push((heading.clone(), bold));
         for line in body {
             for piece in wrap(&format!("    {line}"), usize::from(width)) {

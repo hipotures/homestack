@@ -922,7 +922,7 @@ impl App {
                     self.log(&time, &format!("check {} {label}: {text}", mark.symbol()));
                 }
             }
-            Event::Reviewed { problems, .. } => {
+            Event::Reviewed { problems, .. } | Event::ReviewedDelta { problems, .. } => {
                 self.log(&time, &format!("review: {} problems", problems.len()));
                 for problem in problems {
                     self.log(&time, &format!("problem: {problem}"));
