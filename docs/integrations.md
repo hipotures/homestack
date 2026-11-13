@@ -507,7 +507,7 @@ protect credentials and recovery metadata. Other processes running as the same
 desktop user can access these files. Secrets never enter TOML, logs, diagnostics,
 command arguments, Git, the VPS or PVE nodes.
 
-The standard 32-action profile includes blueprint application and the resource
+The standard 33-action profile includes blueprint application and the resource
 management actions reviewed against Pangolin source revision
 `0842e6df53e898759ed05b77086ddd3c673b6149`:
 
@@ -521,12 +521,21 @@ management actions reviewed against Pangolin source revision
 | Resource policies | `getResourcePolicy`, `updateResourcePolicy`, `setResourcePolicyRules` |
 | Resource rules | `createResourceRule`, `listResourceRules`, `updateResourceRule`, `deleteResourceRule` |
 | Private Resource discovery | `listSiteResources`, `getSiteResource` |
+| Private Resource creation | `createSiteResource` |
 | Resource authorization inspection | `listResourceRoles`, `listResourceUsers` |
 | Organization roles and users | `listRoles`, `listUsers` |
 
 The six read-only discovery and authorization actions were verified against
-Pangolin 1.26.0. The profile does not include Private Resource writes or
-organization client/device inventory access (`listClients`).
+Pangolin 1.26.0. Private Resource creation requires `createSiteResource`; the
+profile does not include Private Resource update/delete actions, authorization
+assignment setters or organization client/device inventory access (`listClients`).
+
+For an existing key, Step 7 detects the missing required actions and adds them
+through the existing bootstrap-authorized Merge operation, reusing the saved
+credential. Manual permission changes in the Pangolin dashboard are not required.
+The organization key cannot grant itself permissions. Including
+`createSiteResource` prepares its authorization; paired-resource deployment is
+not implemented by this permission-profile change.
 
 **Merge** is selected by default and submits `existing ∪ required`, preserving
 manually assigned actions. **Replace** submits only `required`, removing extras.
