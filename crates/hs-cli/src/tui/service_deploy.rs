@@ -589,9 +589,11 @@ fn load_pangolin_domains(
     tell(Event::Busy("Reading verified Pangolin domains".to_owned()));
     let pangolin = session.context().ok_or("The Pangolin context is unavailable")?;
     let domains = service_pangolin::domains(pangolin, &setup.stop)?;
+    let sites = service_pangolin::sites(pangolin, &setup.stop)?;
     let previous = session.settings.clone();
     restore(&mut session.settings, &previous, answers);
     service_pangolin::set_domains(&mut session.settings, domains);
+    service_pangolin::set_sites(&mut session.settings, sites);
     service_pangolin::attach(&mut session.settings);
     Ok(())
 }
@@ -1332,8 +1334,17 @@ fn review(
             });
         match checked {
             Ok(checked) => {
+                if change.is_none() && update_plan.is_none() && create.is_none() {
+                    sections.push((
+                        "Application".into(),
+                        vec![
+                            "KEEP existing application; no image replacement, restart, environment or storage changes"
+                                .into(),
+                        ],
+                    ));
+                }
                 sections.push(("Pangolin attachment".to_owned(), checked.lines()));
-                match public_record(setup, s, checked.domain()) {
+                match public_record_for_plan(setup, s, &checked) {
                     Ok(missing) => {
                         sections.push(("Public DNS".to_owned(), missing.lines()));
                         record = Some(missing);
@@ -1394,7 +1405,7 @@ fn review_published(setup: &Setup, source: &Source, s: &Session, answers: &[Answ
         match checked {
             Ok(checked) => {
                 sections.push(("Pangolin attachment".to_owned(), checked.lines()));
-                match public_record(setup, s, checked.domain()) {
+                match public_record_for_plan(setup, s, &checked) {
                     Ok(missing) => {
                         sections.push(("Public DNS".to_owned(), missing.lines()));
                         record = Some(missing);
@@ -1682,6 +1693,19 @@ fn pangolin_host(s: &Session) -> Result<String, String> {
         .ok()
         .and_then(|url| url.host_str().map(str::to_owned))
         .ok_or_else(|| "The Pangolin server has no public host name".to_owned())
+}
+
+/// Adding only Private exposure must never schedule a public DNS write.
+fn public_record_for_plan(
+    setup: &Setup,
+    s: &Session,
+    plan: &service_pangolin::Plan,
+) -> Result<public_dns::Plan, String> {
+    let record = public_record(setup, s, plan.domain())?;
+    if plan.keeps_public() && !matches!(record, public_dns::Plan::Existing { .. }) {
+        return Err("Existing Public Resource DNS is missing or unresolved; repair it explicitly. Private exposure does not write public DNS".into());
+    }
+    Ok(record)
 }
 
 /// Review the public DNS record needed by the Pangolin resource.

@@ -1,7 +1,9 @@
-//! Publish a service through Pangolin: find or create the HTTP resource its
-//! manifest names, point the resource's backend target at one instance and
-//! add the manifest's login-bypass path rules.
+//! Publish a service through Pangolin's public and optional private HTTP resources.
+//! Paired updates preserve existing public routing and policies exactly; only
+//! missing private exposure is added. Public-only routing retains its existing workflow.
 //! This reads Proxmox and changes only Pangolin routing through Step 7.
+
+mod private;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -28,6 +30,12 @@ use crate::services::{
 pub(super) const ACTION: &str = "Pangolin";
 pub(super) const DOMAIN: &str = "Pangolin domain";
 pub(super) const SUBDOMAIN: &str = "Pangolin subdomain";
+const EXPOSURE: &str = "Pangolin exposure";
+const PRIVATE_SITES: &str = "Private Sites";
+
+fn paired_default() -> bool {
+    true
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -36,6 +44,10 @@ pub(super) struct Publication {
     subdomain: String,
     hostname: String,
     local_domain: String,
+    #[serde(default = "paired_default")]
+    paired: bool,
+    #[serde(default)]
+    private_sites: Vec<String>,
 }
 
 fn check_subdomain(value: &str) -> Result<(), String> {
@@ -64,6 +76,22 @@ pub(super) fn selected_name(settings: &[Setting], answers: &[Answer]) -> Result<
         subdomain,
         hostname: text("Hostname")?,
         local_domain: text("Domain")?,
+        paired: settings
+            .iter()
+            .position(|s| s.title == EXPOSURE)
+            .is_none_or(|i| matches!(answers.get(i), Some(Answer::Picked(v)) if v.as_slice() == [0])),
+        private_sites: settings
+            .iter()
+            .position(|s| s.title == PRIVATE_SITES)
+            .and_then(|i| match answers.get(i) {
+                Some(Answer::Picked(v)) => Some(
+                    v.iter()
+                        .filter_map(|j| settings[i].choices.get(*j).map(|c| c.0.clone()))
+                        .collect(),
+                ),
+                _ => None,
+            })
+            .unwrap_or_default(),
     })
 }
 
@@ -121,6 +149,17 @@ pub(super) fn restore_publication(
         return Ok(());
     };
     for setting in settings {
+        if setting.title == EXPOSURE {
+            setting.picked = vec![usize::from(!saved.paired)];
+        }
+        if setting.title == PRIVATE_SITES {
+            setting.choices = saved
+                .private_sites
+                .iter()
+                .map(|n| (n.clone(), "Saved Site; verify when attaching".into()))
+                .collect();
+            setting.picked = (0..setting.choices.len()).collect();
+        }
         if setting.title == SUBDOMAIN {
             setting.text = Some(saved.subdomain.clone());
         }
@@ -175,6 +214,7 @@ struct Site {
     id: u64,
     name: String,
     nice: String,
+    online: bool,
 }
 
 struct Domain {
@@ -216,6 +256,11 @@ pub(super) struct Plan {
     body: Value,
     bypass_paths: Vec<String>,
     bypass: Bypass,
+    /// A paired update never normalizes an existing public resource.
+    keep_public: bool,
+    public_snapshot: Option<Value>,
+    public_receipt: PathBuf,
+    private: Option<private::Plan>,
 }
 
 /// What the resource lacks of the manifest's login bypass: path rules to add
@@ -292,7 +337,20 @@ pub(super) fn settings(source: &Source) -> Vec<Setting> {
     subdomain.picked.clear();
     subdomain.text = Some(exposure.subdomain.clone());
     subdomain.check = Some(check_subdomain);
-    vec![action, subdomain, domain]
+    let mut exposure = action.clone();
+    exposure.title = EXPOSURE.into();
+    exposure.note = "Paired uses one HTTPS hostname: public Pangolin login and private Pangolin Client access through the existing Admin role. Public-only preserves external API integrations. Existing resources are never deleted by this selection.".into();
+    exposure.choices = vec![
+        ("Public + Private".into(), String::new()),
+        ("Public only".into(), String::new()),
+    ];
+    let mut sites = action.clone();
+    sites.title = PRIVATE_SITES.into();
+    sites.note = "No selection: retain an existing pair's Sites, or use the public backend's Site. Select additional Sites only when each can reach the same destination. Selecting a Site confirms that network route; HomeStack validates its organization, identity and online state. Attach/refresh Pangolin to load Sites.".into();
+    sites.choices.clear();
+    sites.picked.clear();
+    sites.multiple = true;
+    vec![action, subdomain, domain, exposure, sites]
 }
 
 /// Load verified domains with the same organization-scoped key used for routing.
@@ -302,6 +360,41 @@ pub(super) fn domains(pangolin: &Pangolin, stop: &AtomicBool) -> Result<Vec<Stri
         return Err("Pangolin has no verified domain; add one in Pangolin first".to_owned());
     }
     Ok(domains.into_iter().map(|d| d.base).collect())
+}
+
+/// Populate the existing multi-select with current Site identifiers.
+pub(super) fn sites(pangolin: &Pangolin, stop: &AtomicBool) -> Result<Vec<(String, String)>, String> {
+    Ok(Api::open(pangolin, stop)?
+        .catalog()?
+        .sites
+        .into_iter()
+        .filter(|s| s.online)
+        .map(|s| (s.nice, s.name))
+        .collect())
+}
+
+pub(super) fn set_sites(settings: &mut [Setting], sites: Vec<(String, String)>) {
+    if let Some(setting) = settings.iter_mut().find(|s| s.title == PRIVATE_SITES) {
+        let selected: Vec<String> = setting
+            .picked
+            .iter()
+            .filter_map(|i| setting.choices.get(*i).map(|c| c.0.clone()))
+            .collect();
+        setting.choices = sites;
+        for name in &selected {
+            if !setting.choices.iter().any(|c| &c.0 == name) {
+                setting
+                    .choices
+                    .push((name.clone(), "Unavailable Site; review will block".into()));
+            }
+        }
+        setting.picked = setting
+            .choices
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| selected.contains(&c.0).then_some(i))
+            .collect();
+    }
 }
 
 /// Mark Pangolin attached: the deployment then publishes through it.
@@ -386,13 +479,18 @@ impl<'a> Api<'a> {
     }
 
     fn rows(&self, field: &str) -> Result<Vec<Value>, String> {
+        let field_key = if field == "private-resources" {
+            "siteResources"
+        } else {
+            field
+        };
         let mut rows = Vec::new();
         for page in 1..=1000 {
             let data = self.get(&format!(
                 "/v1/org/{}/{field}?pageSize={PAGE}&page={page}",
                 self.ctx.organization
             ))?;
-            let items = data[field]
+            let items = data[field_key]
                 .as_array()
                 .filter(|items| items.len() <= PAGE)
                 .ok_or("Unexpected Pangolin listing; response omitted")?;
@@ -412,17 +510,22 @@ impl<'a> Api<'a> {
     fn catalog(&self) -> Result<Catalog, String> {
         let mut resources = Vec::new();
         for row in self.rows("resources")? {
-            if row["mode"] == "http" && row["enabled"] == true {
-                resources.push(self.resource(&row)?);
+            if row["fullDomain"].as_str().is_some_and(|s| !s.is_empty()) {
+                resources.push(Resource {
+                    id: id(&row, "resourceId")?,
+                    domain: text(&row, "fullDomain")?,
+                    name: text(&row, "name")?,
+                });
             }
         }
         let mut sites = Vec::new();
         for row in self.rows("sites")? {
-            if row["online"] == true && row["type"] == "newt" {
+            if row["type"] == "newt" {
                 sites.push(Site {
                     id: id(&row, "siteId")?,
                     name: text(&row, "name")?,
                     nice: text(&row, "niceId")?,
+                    online: row["online"].as_bool().ok_or("Missing Site online state")?,
                 });
             }
         }
@@ -482,7 +585,7 @@ impl<'a> Api<'a> {
         if current_site["orgId"] != self.ctx.organization
             || id(&current_site, "siteId")? != site.id
             || current_site["niceId"] != site.nice
-            || current_site["online"] != true
+            || current_site["online"] != site.online
             || current_site["type"] != "newt"
         {
             return Err("Pangolin Site identity changed; review again".to_owned());
@@ -719,6 +822,18 @@ fn plan(
     site: Option<&str>,
     publication: Publication,
 ) -> Result<Plan, String> {
+    let api = Api::open(pangolin, stop)?;
+    plan_with_api(source, &api, container, address, site, publication)
+}
+
+fn plan_with_api(
+    source: &Source,
+    api: &Api<'_>,
+    container: Option<Container>,
+    address: String,
+    site: Option<&str>,
+    publication: Publication,
+) -> Result<Plan, String> {
     let exposure = source
         .manifest
         .pangolin
@@ -731,7 +846,6 @@ fn plan(
         .find(|p| p.name == exposure.port)
         .ok_or("The manifest's Pangolin exposure refers to an undeclared port")?
         .port;
-    let api = Api::open(pangolin, stop)?;
     let catalog = api.catalog()?;
     check_subdomain(&publication.subdomain)?;
     let (domain_id, base_domain, domain) = full_domain(&catalog, &publication.subdomain, &publication.domain)?;
@@ -739,26 +853,57 @@ fn plan(
         domain: base_domain.clone(),
         ..publication
     };
-    let resource = catalog.resources.iter().find(|r| r.domain == domain).cloned();
-    let site = match site {
-        Some(name) => catalog
+    let public_receipt = api.ctx.key.with_file_name(format!(
+        "{}.created.json",
+        private::identifier("public", &api.ctx.identity, source, &domain)
+    ));
+    let resource = private::public_match(&catalog.resources, &domain)?;
+    let previous = resource.as_ref().map(|r| api.target(r.id)).transpose()?.flatten();
+    let keep_public = publication.paired && resource.is_some() && previous.is_some();
+    let public_snapshot = if publication.paired {
+        resource
+            .as_ref()
+            .map(|r| private::public_snapshot(&api, r, &domain_id, &publication.subdomain))
+            .transpose()?
+    } else {
+        None
+    };
+    let site = if keep_public {
+        let target = previous.as_ref().ok_or("The Public Resource has no target")?;
+        private::validate_target(&target.body, &address, port)?;
+        catalog
             .sites
             .iter()
-            .find(|s| s.nice == name)
+            .find(|s| Some(s.id) == target.body["siteId"].as_u64())
             .cloned()
-            .ok_or_else(|| format!("Pangolin Site {name} is not online"))?,
-        None => catalog
-            .sites
-            .first()
-            .cloned()
-            .ok_or("Pangolin has no online Sites; start a Site connector first")?,
+            .ok_or("The existing Public Resource Site is unavailable; no routing was changed")?
+    } else {
+        match site {
+            Some(name) => catalog
+                .sites
+                .iter()
+                .find(|s| s.nice == name && s.online)
+                .cloned()
+                .ok_or_else(|| format!("Pangolin Site {name} is not online"))?,
+            None => catalog
+                .sites
+                .iter()
+                .find(|s| s.online)
+                .cloned()
+                .ok_or("Pangolin has no online Sites; start a Site connector first")?,
+        }
     };
     api.validate(resource.as_ref(), &site)?;
-    let previous = match &resource {
-        Some(resource) => api.target(resource.id)?,
-        None => None,
-    };
+    if publication.paired && resource.is_some() && previous.is_none() {
+        let snapshot = public_snapshot.as_ref().ok_or("Missing Public Resource identity")?;
+        if !private::owns_public(&public_receipt, &snapshot["resource"])? {
+            return Err("The existing Public Resource has no target and is not identified as this deployment's creation; repair it explicitly".into());
+        }
+    }
     let bypass = api.bypass(resource.as_ref().map(|r| r.id), &exposure.bypass_paths)?;
+    if keep_public && (!bypass.missing.is_empty() || bypass.enable) {
+        return Err("The existing Public Resource lacks the manifest's enabled login-bypass rules; review and repair its public policy explicitly. Paired exposure never changes it".into());
+    }
     let create = resource.is_none().then(|| {
         json!({
             "name": exposure.name,
@@ -806,7 +951,28 @@ fn plan(
     body["hcFollowRedirects"] = json!(false);
     body["hcHealthyThreshold"] = json!(1);
     body["hcUnhealthyThreshold"] = json!(3);
+    if keep_public {
+        body = previous.as_ref().ok_or("Missing reviewed Public target")?.body.clone();
+    }
+    let private = if publication.paired {
+        Some(private::review(
+            &api,
+            &catalog,
+            source,
+            &publication,
+            &domain,
+            &domain_id,
+            &body,
+            &site,
+        )?)
+    } else {
+        None
+    };
     Ok(Plan {
+        keep_public,
+        public_snapshot,
+        public_receipt,
+        private,
         container,
         address,
         repository: source.repository.clone(),
@@ -831,6 +997,14 @@ impl Plan {
         &self.domain
     }
 
+    pub(super) fn keeps_public(&self) -> bool {
+        self.keep_public
+    }
+
+    pub(super) fn unchanged(&self) -> bool {
+        self.keep_public && self.private.as_ref().is_some_and(|p| p.existing.is_some())
+    }
+
     fn target_unchanged(&self) -> bool {
         self.previous.as_ref().is_some_and(|target| target.body == self.body)
     }
@@ -843,28 +1017,43 @@ impl Plan {
                 self.domain,
                 self.site.name,
                 self.site.id,
-                self.address,
+                self.body["ip"].as_str().unwrap_or(&self.address),
                 self.body["port"],
                 self.container
                     .as_ref()
                     .map_or_else(String::new, |c| format!(" · CT {} on {}", c.ctid, c.node))
             ),
             match (&self.resource, &self.previous) {
-                (None, _) => "Create the resource with Pangolin's default access policy (Pangolin login)".to_owned(),
+                (None, _) => {
+                    "Public Resource: CREATE with Pangolin's default access policy (Pangolin login)".to_owned()
+                }
                 (Some(_), Some(target)) if self.target_unchanged() => {
-                    format!("Backend target {} unchanged", target.id)
+                    format!(
+                        "Public Resource: KEEP; target {} unchanged; SSO, access policies and health settings preserved",
+                        target.id
+                    )
                 }
                 (Some(_), Some(target)) => format!("Update existing backend target {}", target.id),
                 (Some(_), None) => "Create the missing backend target".to_owned(),
             },
-            format!(
-                "Monitoring enabled: GET http://{}:{}{} expects HTTP {}",
-                self.address,
-                self.body["hcPort"],
-                self.body["hcPath"].as_str().unwrap_or_default(),
-                self.body["hcStatus"]
-            ),
+            if self.keep_public {
+                "No public target, policy, health-check or certificate writes".into()
+            } else {
+                format!(
+                    "Monitoring enabled: GET http://{}:{}{} expects HTTP {}",
+                    self.address,
+                    self.body["hcPort"],
+                    self.body["hcPath"].as_str().unwrap_or_default(),
+                    self.body["hcStatus"]
+                )
+            },
         ];
+        if let Some(private) = &self.private {
+            lines.extend(private.lines(&self.domain));
+        }
+        if self.unchanged() {
+            lines.push("No Pangolin changes: the Public + Private pair is already correct".into());
+        }
         lines.extend(
             self.bypass
                 .missing
@@ -911,6 +1100,10 @@ pub(super) async fn apply(
 /// Create or reuse the reviewed resource, its target and its bypass rules.
 fn route(pangolin: &Pangolin, stop: &AtomicBool, plan: &Plan) -> Result<Vec<String>, String> {
     let api = Api::open(pangolin, stop)?;
+    route_with_api(&api, plan)
+}
+
+fn route_with_api(api: &Api<'_>, plan: &Plan) -> Result<Vec<String>, String> {
     let catalog = api.catalog()?;
     if !catalog
         .domains
@@ -927,6 +1120,21 @@ fn route(pangolin: &Pangolin, stop: &AtomicBool, plan: &Plan) -> Result<Vec<Stri
         return Err("Pangolin routing changed since review; review again".to_owned());
     }
     api.validate(plan.resource.as_ref(), &plan.site)?;
+    if let Some(private) = &plan.private {
+        private.validate(&api, &catalog, plan)?;
+    }
+    if let (Some(snapshot), Some(resource)) = (&plan.public_snapshot, &plan.resource) {
+        if private::public_snapshot(&api, resource, &plan.domain_id, &plan.publication.subdomain)? != *snapshot {
+            return Err("The Public Resource or its access policies changed since review; review again".into());
+        }
+    }
+    if plan.keep_public {
+        let mut lines = vec!["Public Resource, target, SSO, policies and health settings preserved".into()];
+        if let Some(private) = &plan.private {
+            lines.extend(private.apply(&api, plan)?);
+        }
+        return Ok(lines);
+    }
     let mut lines = Vec::new();
     let resource = match (&plan.resource, &plan.create) {
         (Some(resource), _) => resource.id,
@@ -950,8 +1158,23 @@ fn route(pangolin: &Pangolin, stop: &AtomicBool, plan: &Plan) -> Result<Vec<Stri
                     ),
                 });
             }
+            let rid = id(&created["data"], "resourceId")?;
+            if plan.private.is_some() {
+                let row = api.get(&format!("/v1/resource/{rid}"))?;
+                if row["orgId"] != api.ctx.organization
+                    || row["domainId"] != plan.domain_id
+                    || row["fullDomain"] != plan.domain
+                    || row["ssl"] != true
+                    || row["sso"] != true
+                    || row["mode"] != "http"
+                    || row["enabled"] != true
+                {
+                    return Err("New Public Resource defaults do not match enabled HTTPS with SSO; inspect the resource before continuing".into());
+                }
+                private::remember_public(&plan.public_receipt, &row)?;
+            }
             lines.push(format!("Resource {} created", plan.domain));
-            id(&created["data"], "resourceId")?
+            rid
         }
         (None, None) => return Err("The reviewed plan has no resource".to_owned()),
     };
@@ -991,11 +1214,17 @@ fn route(pangolin: &Pangolin, stop: &AtomicBool, plan: &Plan) -> Result<Vec<Stri
     if !saved.missing.is_empty() || saved.enable {
         return Err("Saved Pangolin rules do not match the review; inspect the resource rules".to_owned());
     }
+    if let Some(private) = &plan.private {
+        lines.extend(private.apply(&api, plan)?);
+    }
     Ok(lines)
 }
 
 /// Create or update the backend target, then verify it reads back as reviewed.
 fn save_target(api: &Api, plan: &Plan, resource: u64) -> Result<(), String> {
+    if api.target(resource)? != plan.previous {
+        return Err("The Public target changed before saving; review again".into());
+    }
     let (method, path) = match &plan.previous {
         Some(target) => ("POST", format!("/v1/target/{}", target.id)),
         None => ("PUT", format!("/v1/resource/{resource}/target")),

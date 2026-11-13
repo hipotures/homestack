@@ -533,9 +533,9 @@ assignment setters or organization client/device inventory access (`listClients`
 For an existing key, Step 7 detects the missing required actions and adds them
 through the existing bootstrap-authorized Merge operation, reusing the saved
 credential. Manual permission changes in the Pangolin dashboard are not required.
-The organization key cannot grant itself permissions. Including
-`createSiteResource` prepares its authorization; paired-resource deployment is
-not implemented by this permission-profile change.
+The organization key cannot grant itself permissions. `createSiteResource`
+authorizes private HTTP publication during service deployment; no separate
+role-assignment write is needed because Pangolin assigns Admin during creation.
 
 **Merge** is selected by default and submits `existing ∪ required`, preserving
 manually assigned actions. **Replace** submits only `required`, removing extras.
@@ -594,6 +594,45 @@ The bootstrap credential stays in memory and is never revoked automatically.
 Restart requires reconnecting Steps 5–6 and Refresh; historical evidence never
 authorizes network requests. Verification uses synthetic local API responses and
 rendering at 80×24 and 120×36, without production access.
+
+### Paired service publication
+
+In a service's existing deployment/update settings, attach Pangolin and select
+**Pangolin exposure → Public + Private** (the default), then choose the existing
+Pangolin domain and subdomain. **Public only** remains available for services
+that need it; selecting it never deletes an existing private resource. No manifest
+schema change or application-repository edit is required.
+
+Both resources use one external HTTPS hostname and the application's HTTP backend.
+The private half uses Pangolin's managed-domain HTTP mode, with TLS at the Site
+connector and the existing organization Admin role. No device inventory or
+individual device assignments are needed. Existing public SSO and service-specific
+rules, including Metrics' MCP bypass, are preserved.
+
+Leave **Private Sites** unselected to retain an existing private resource's Site
+set, or to use the public target's Site for a new private resource. Additional
+Sites can be selected after attaching/refreshing Pangolin. Select only connectors
+that can reach the same destination: selection confirms the network route;
+HomeStack checks organization, identity and current availability, but does not
+actively probe the backend from each connector. Existing offline failover Sites
+are retained when another associated Site is online.
+
+For an existing Public-only service, select the current instance and keep its
+image, reinstall, application and resource settings unchanged. Review shows
+**Public Resource: KEEP**, **Private Resource: CREATE**, the hostname, destination,
+Sites, managed TLS and Admin access. Existing public targets, health checks,
+policies and DNS are not normalized. Missing public DNS or incompatible resource
+settings block the addition and require an explicit repair outside this operation.
+An already correct pair shows **KEEP** for both resources and performs no Pangolin
+writes. Conflicting backend, domain, Site or authorization settings are never
+silently overwritten.
+
+A private creation reserves a durable local recovery marker before sending one
+request. An uncertain response is not retried: refresh inventory first. If the
+complete resource is found, a new review reuses it. If no resource appears, the
+review identifies the marker for explicit recovery after inspecting Pangolin.
+A public creation receipt allows a later review to finish its missing target
+without adopting an unrelated manually created resource.
 
 ### Step 8: Pangolin Site connectors
 
