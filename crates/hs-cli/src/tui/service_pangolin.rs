@@ -232,6 +232,7 @@ struct Catalog {
 struct Container {
     ctid: u32,
     node: String,
+    backend: String,
     /// The existing container's reviewed identity; `None` for an instance
     /// this deployment creates before attaching.
     existing: Option<Instance>,
@@ -241,6 +242,7 @@ pub(super) struct Plan {
     /// `None`: a service without resources, reached at `address` only.
     container: Option<Container>,
     address: String,
+    backend: String,
     repository: String,
     service: String,
     /// The resource's full domain.
@@ -762,6 +764,14 @@ fn full_domain(catalog: &Catalog, subdomain: &str, selected: &str) -> Result<(St
     ))
 }
 
+fn internal_hostname(hostname: &str, domain: &str) -> Result<String, String> {
+    let name = format!("{hostname}.{}", domain.trim_end_matches('.'));
+    if name.len() > 253 || !name.split('.').all(crate::services::manifest::valid_subdomain) {
+        return Err("The instance needs a valid local hostname and DNS domain before publication".into());
+    }
+    Ok(name)
+}
+
 pub(super) fn review(
     source: &Source,
     pangolin: &Pangolin,
@@ -779,6 +789,13 @@ pub(super) fn review(
                 Container {
                     ctid: instance.ctid,
                     node: instance.node.clone(),
+                    backend: internal_hostname(
+                        &instance.hostname,
+                        instance
+                            .searchdomain
+                            .as_deref()
+                            .ok_or("The instance has no local DNS domain")?,
+                    )?,
                     existing: Some(instance.clone()),
                 },
                 instance.address.clone(),
@@ -788,6 +805,7 @@ pub(super) fn review(
             Container {
                 ctid: new.ctid,
                 node: new.node.clone(),
+                backend: new.fqdn.clone(),
                 existing: None,
             },
             new.address.clone(),
@@ -846,6 +864,13 @@ fn plan_with_api(
         .find(|p| p.name == exposure.port)
         .ok_or("The manifest's Pangolin exposure refers to an undeclared port")?
         .port;
+    let backend = container
+        .as_ref()
+        .map(|c| c.backend.clone())
+        .unwrap_or_else(|| address.clone());
+    if container.as_ref().is_some_and(|c| c.existing.is_some()) {
+        private::verify_destination(&backend, &address)?;
+    }
     let catalog = api.catalog()?;
     check_subdomain(&publication.subdomain)?;
     let (domain_id, base_domain, domain) = full_domain(&catalog, &publication.subdomain, &publication.domain)?;
@@ -917,7 +942,7 @@ fn plan_with_api(
         .map(|t| t.body.clone())
         .unwrap_or_else(|| json!({"enabled": true}));
     body["siteId"] = json!(site.id);
-    body["ip"] = json!(address);
+    body["ip"] = json!(backend);
     body["mode"] = json!("http");
     body["method"] = json!("http");
     body["port"] = json!(port);
@@ -939,7 +964,7 @@ fn plan_with_api(
         .port;
     body["hcEnabled"] = json!(true);
     body["hcMode"] = json!("http");
-    body["hcHostname"] = json!(address);
+    body["hcHostname"] = json!(backend);
     body["hcPort"] = json!(health_port);
     body["hcScheme"] = json!("http");
     body["hcPath"] = json!(path);
@@ -954,6 +979,8 @@ fn plan_with_api(
     if keep_public {
         body = previous.as_ref().ok_or("Missing reviewed Public target")?.body.clone();
     }
+    let mut private_target = body.clone();
+    private_target["ip"] = json!(backend);
     let private = if publication.paired {
         Some(private::review(
             &api,
@@ -962,7 +989,7 @@ fn plan_with_api(
             &publication,
             &domain,
             &domain_id,
-            &body,
+            &private_target,
             &site,
         )?)
     } else {
@@ -975,6 +1002,7 @@ fn plan_with_api(
         private,
         container,
         address,
+        backend,
         repository: source.repository.clone(),
         service: source.manifest.id.clone(),
         domain,
@@ -1041,7 +1069,7 @@ impl Plan {
             } else {
                 format!(
                     "Monitoring enabled: GET http://{}:{}{} expects HTTP {}",
-                    self.address,
+                    self.body["hcHostname"].as_str().unwrap_or(&self.backend),
                     self.body["hcPort"],
                     self.body["hcPath"].as_str().unwrap_or_default(),
                     self.body["hcStatus"]
@@ -1081,7 +1109,11 @@ pub(super) async fn apply(
 ) -> Result<Vec<String>, String> {
     if let Some(container) = &plan.container {
         let now = instance::read(pve, container.ctid).await?;
-        if now.repository != plan.repository
+        if internal_hostname(
+            &now.hostname,
+            now.searchdomain.as_deref().ok_or("The instance lost its DNS domain")?,
+        )? != plan.backend
+            || now.repository != plan.repository
             || now.service != plan.service
             || now.address != plan.address
             || container
@@ -1104,6 +1136,7 @@ fn route(pangolin: &Pangolin, stop: &AtomicBool, plan: &Plan) -> Result<Vec<Stri
 }
 
 fn route_with_api(api: &Api<'_>, plan: &Plan) -> Result<Vec<String>, String> {
+    private::verify_destination(&plan.backend, &plan.address)?;
     let catalog = api.catalog()?;
     if !catalog
         .domains
@@ -1189,7 +1222,7 @@ fn route_with_api(api: &Api<'_>, plan: &Plan) -> Result<Vec<String>, String> {
         "https://{} routed through {} to {}:{}{}",
         plan.domain,
         plan.site.name,
-        plan.address,
+        plan.body["ip"].as_str().unwrap_or(&plan.backend),
         plan.body["port"],
         if plan.container.is_some() {
             "; container and persistent volume preserved"

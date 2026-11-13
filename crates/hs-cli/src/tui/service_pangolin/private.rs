@@ -117,6 +117,15 @@ fn same_destination(actual: &str, expected: &str) -> Result<bool, String> {
     Ok(addresses(actual)? == addresses(expected)?)
 }
 
+pub(super) fn verify_destination(hostname: &str, address: &str) -> Result<(), String> {
+    if !same_destination(hostname, address)? {
+        return Err(format!(
+            "Local backend {hostname} does not resolve to the reviewed instance {address}; check local DNS before publication"
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn validate_target(body: &Value, address: &str, port: u16) -> Result<(), String> {
     if !same_destination(&text(body, "ip")?, address)?
         || body["port"] != port
@@ -433,6 +442,7 @@ impl Plan {
             check_private(row, &self.body, &self.admin)?;
         }
         // Re-resolve internal DNS before mutation as it may have changed after review.
+        verify_destination(&plan.backend, &plan.address)?;
         validate_target(
             &plan.body,
             &plan.address,

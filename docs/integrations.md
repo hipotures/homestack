@@ -604,6 +604,13 @@ that need it; selecting it never deletes an existing private resource. No manife
 schema change or application-repository edit is required.
 
 Both resources use one external HTTPS hostname and the application's HTTP backend.
+New public targets, their health checks and new private resources use the actual
+instance's local FQDN (including any instance suffix), rather than its current IP.
+HomeStack verifies that this name resolves to the reviewed instance address before
+applying publication. Existing public targets and health checks marked KEEP retain
+their current settings, including any IP addresses; adding private exposure does
+not migrate them. A missing private resource uses the local FQDN independently of
+an existing public target's address format.
 The private half uses Pangolin's managed-domain HTTP mode, with TLS at the Site
 connector and the existing organization Admin role. No device inventory or
 individual device assignments are needed. Existing public SSO and service-specific
