@@ -11,7 +11,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 use zeroize::Zeroizing;
 
-pub const ACTIONS: [&str; 26] = [
+pub const ACTIONS: [&str; 32] = [
     "applyBlueprint",
     "createSite",
     "getSite",
@@ -38,6 +38,12 @@ pub const ACTIONS: [&str; 26] = [
     "listResourceRules",
     "updateResourceRule",
     "deleteResourceRule",
+    "listSiteResources",
+    "getSiteResource",
+    "listResourceRoles",
+    "listResourceUsers",
+    "listRoles",
+    "listUsers",
 ];
 const ORG_REQUIRED: &str = "Organization not verified. Grant getOrg to the bootstrap key and verify Step 6 again.";
 const MULTIPLE: &str = "Multiple HomeStack API keys exist. Automatic selection is unsafe.";
@@ -634,7 +640,7 @@ fn work(endpoint: &Endpoint, mut input: Input, stop: &AtomicBool, out: &mut Outc
         out.plan = None;
         if api(root.request("POST", &action_path(&input.org, &id), Some(&body), Probe::Actions))?.0 != 200 {
             return Err(
-                "Action assignment rejected. Check compatibility with the required 26-action profile. Credential is retained; recheck before applying another reviewed plan."
+                "Action assignment rejected. Check compatibility with the required 32-action profile. Credential is retained; recheck before applying another reviewed plan."
                     .into(),
             );
         }
