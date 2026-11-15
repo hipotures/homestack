@@ -1,0 +1,6 @@
+/* Keyboard focus ring for the design-system controls. Load it after component CSS (also an application's) so it
+   wins over their outline rules. Elements outside the design system can opt in with .ds-focus-ring. */
+:where(.ds-btn, .ds-icon-btn, .ds-segmented button, .ds-field input, .ds-field select, .ds-field textarea,
+  button.ds-panel-head, .ds-input, .ds-select, .ds-textarea, .ds-focus-ring):focus-visible {
+  outline: var(--ds-focus-ring-width) solid var(--accent); outline-offset: var(--ds-focus-ring-offset);
+}
