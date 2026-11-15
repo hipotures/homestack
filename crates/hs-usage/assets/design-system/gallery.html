@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design system gallery</title>
+<!-- Standalone: open this file directly in a browser (file://). No React, no dev server, no build. -->
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="themes.css">
+<link rel="stylesheet" href="base.css">
+<link rel="stylesheet" href="components.css">
+<link rel="stylesheet" href="state.css">
+<style>
+  /* Gallery layout only; not part of the design system. */
+  h1, h2, h3, p { margin:0; }
+  h1 { font-size:var(--ds-text-4xl); letter-spacing:-.035em; line-height:1.15; }
+  h2 { font-size:var(--ds-text-xl); letter-spacing:-.02em; }
+  body { padding:var(--ds-space-9) 16px var(--ds-space-11); }
+  .g-page { max-width:var(--ds-content-max); margin:0 auto; }
+  .g-head { display:flex; flex-wrap:wrap; align-items:flex-end; justify-content:space-between; gap:var(--ds-space-7); margin-bottom:var(--ds-space-9); }
+  .g-head p { color:var(--text-soft); margin-top:var(--ds-space-3); max-width:60ch; line-height:1.5; }
+  .g-controls { display:flex; flex-wrap:wrap; align-items:center; gap:var(--ds-space-6); }
+  .g-controls label { color:var(--text-dim); font-size:var(--ds-text-sm); display:flex; align-items:center; gap:var(--ds-space-3); }
+  .g-controls input[type="color"] { width:36px; height:28px; padding:2px; }
+  section { margin-top:var(--ds-space-10); }
+  section > h2 { margin-bottom:var(--ds-space-3); }
+  section > p { color:var(--text-dim); font-size:var(--ds-text-md); margin-bottom:var(--ds-space-6); line-height:1.5; }
+  code { font-family:var(--ds-font-mono); font-size:.92em; color:var(--text-soft); }
+  .g-row { display:flex; flex-wrap:wrap; align-items:center; gap:var(--ds-space-5); }
+  .g-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap:var(--ds-space-7); }
+  .g-swatches { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:var(--ds-space-5); }
+  .g-swatch { border:1px solid var(--line); border-radius:var(--ds-radius-md); overflow:hidden; font-size:var(--ds-text-sm); }
+  .g-swatch span { display:block; height:44px; border-bottom:1px solid var(--line); }
+  .g-swatch code { display:block; padding:var(--ds-space-3) var(--ds-space-4); }
+  .g-space { display:flex; align-items:center; gap:var(--ds-space-5); font-size:var(--ds-text-sm); margin-bottom:var(--ds-space-3); }
+  .g-space span { height:10px; background:var(--accent); border-radius:2px; }
+  .g-radius { display:flex; flex-wrap:wrap; gap:var(--ds-space-6); }
+  .g-radius div { width:72px; height:52px; border:1px solid var(--line-strong); background:var(--panel-2); display:grid; place-items:center; font-size:var(--ds-text-2xs); color:var(--text-dim); }
+  .g-table { overflow-x:auto; }
+  .g-table table { min-width:520px; }
+  .visually-hidden { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+</style>
+</head>
+<body>
+<div class="g-page">
+  <header class="g-head">
+    <div>
+      <h1>Design system gallery</h1>
+      <p>Framework-independent primitives from <code>web/design-system/</code> (entry point <code>ds.css</code>). Every control is a native element: use
+        <kbd>Tab</kbd> to see the focus ring, <kbd>Space</kbd>/<kbd>Enter</kbd> to press toggles.</p>
+    </div>
+    <div class="g-controls">
+      <div class="ds-segmented" role="group" aria-label="Theme" id="theme">
+        <button type="button" data-theme-value="dark" aria-pressed="true">Dark</button>
+        <button type="button" data-theme-value="light" aria-pressed="false">Light</button>
+      </div>
+      <label>Accent hook <input type="color" id="accent" value="#4f9dea"></label>
+      <button type="button" class="ds-btn ds-btn-ghost ds-btn-compact" id="accent-reset">Reset accent</button>
+    </div>
+  </header>
+
+  <section aria-labelledby="buttons">
+    <h2 id="buttons">Buttons</h2>
+    <p><code>.ds-btn</code> (secondary) with <code>.ds-btn-primary</code>, <code>.ds-btn-ghost</code>, <code>.ds-btn-danger</code>,
+      <code>.ds-btn-compact</code>; <code>.ds-icon-btn</code> needs an <code>aria-label</code>. Disabled uses the native attribute.</p>
+    <div class="g-row">
+      <button type="button" class="ds-btn ds-btn-primary">Run</button>
+      <button type="button" class="ds-btn">Open review</button>
+      <button type="button" class="ds-btn ds-btn-ghost">Cancel</button>
+      <button type="button" class="ds-btn ds-btn-ghost ds-btn-compact">Compact</button>
+      <button type="button" class="ds-btn ds-btn-danger">Archive workspace</button>
+      <button type="button" class="ds-icon-btn" aria-label="Settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg></button>
+    </div>
+    <div class="g-row" style="margin-top:var(--ds-space-5)">
+      <button type="button" class="ds-btn ds-btn-primary" disabled>Run (disabled)</button>
+      <button type="button" class="ds-btn" disabled>Secondary (disabled)</button>
+      <button type="button" class="ds-btn ds-btn-ghost" disabled>Ghost (disabled)</button>
+      <button type="button" class="ds-btn ds-btn-danger" disabled>Danger (disabled)</button>
+      <button type="button" class="ds-icon-btn" aria-label="Close" disabled>×</button>
+    </div>
+    <p style="margin-top:var(--ds-space-6)">An inline <code>&lt;svg aria-hidden="true"&gt;</code> child sits next to the label. Applications whose body text is larger than
+      their controls set <code>--ds-control-font-size</code>.</p>
+    <div class="g-row">
+      <button type="button" class="ds-btn ds-btn-primary"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>Sync</button>
+      <button type="button" class="ds-btn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>Refresh</button>
+      <button type="button" class="ds-btn ds-btn-compact" disabled><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>Syncing…</button>
+    </div>
+  </section>
+
+  <section aria-labelledby="status">
+    <h2 id="status">Badges and status</h2>
+    <p><code>.ds-badge</code> with <code>data-tone="neutral|success|accent|warning|danger"</code> (neutral is the default), <code>.ds-count</code>, and
+      <code>.ds-status-dot</code> with <code>data-status="running|waiting|error|done"</code>. Dots are decorative: keep a text label next to them.</p>
+    <div class="g-row">
+      <span class="ds-badge">Not started</span>
+      <span class="ds-badge" data-tone="accent">Running</span>
+      <span class="ds-badge" data-tone="success">Complete</span>
+      <span class="ds-badge" data-tone="warning">Stale</span>
+      <span class="ds-badge" data-tone="danger">Failed</span>
+      <span class="ds-badge" data-tone="neutral">v0.2.0</span>
+      <span class="ds-badge" data-tone="accent"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="12" cy="18" r="3"/><path d="M6 9v1a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V9M12 12v3"/></svg>Fork</span>
+      <span class="ds-count">12</span>
+    </div>
+    <div class="g-row" style="margin-top:var(--ds-space-5)">
+      <span><span class="ds-status-dot" aria-hidden="true"></span>Idle</span>
+      <span><span class="ds-status-dot" data-status="running" aria-hidden="true"></span>Running</span>
+      <span><span class="ds-status-dot" data-status="waiting" aria-hidden="true"></span>Waiting</span>
+      <span><span class="ds-status-dot" data-status="error" aria-hidden="true"></span>Error</span>
+      <span><span class="ds-status-dot" data-status="done" aria-hidden="true"></span>Done</span>
+    </div>
+    <div style="margin-top:var(--ds-space-6);max-width:420px">
+      <label for="progress-demo" class="visually-hidden">Translation progress</label>
+      <progress class="ds-progress" id="progress-demo" max="100" value="62">62%</progress>
+    </div>
+  </section>
+
+  <section aria-labelledby="notices">
+    <h2 id="notices">Notices</h2>
+    <p><code>.ds-notice</code> (warning by default) and <code>data-tone="danger"</code>. Use <code>role="alert"</code> only for errors that appear after a user action.</p>
+    <div class="ds-notice"><div><strong>Analysis is complete</strong><p>Review and confirm terminology before translation.</p></div><button type="button" class="ds-btn ds-btn-primary">Open review</button></div>
+    <div class="ds-notice" data-tone="danger"><div><strong>Prepare failed</strong><p>Check the source and retry. The draft is still available.</p></div><button type="button" class="ds-btn">Retry</button></div>
+  </section>
+
+  <section aria-labelledby="panels">
+    <h2 id="panels">Panels and tables</h2>
+    <p><code>.ds-panel</code> with <code>.ds-panel-head</code>, <code>.ds-panel-title</code>, <code>.ds-panel-body</code> (no padding when the body holds a table); <code>&lt;table class="ds-table"&gt;</code>, <code>.ds-table-interactive</code> for clickable rows (hover a row below) and <code>.ds-table-card</code> for a raised table. Progress bars use <code>&lt;progress class="ds-progress"&gt;</code>.</p>
+    <div class="g-grid">
+      <article class="ds-panel">
+        <div class="ds-panel-head"><h3 class="ds-panel-title">Source</h3><span class="ds-badge" data-tone="success">Verified</span></div>
+        <div class="ds-panel-body"><p>Frozen source and chunk manifest verified. 24 sections detected.</p></div>
+      </article>
+      <article class="ds-panel">
+        <div class="ds-panel-head"><h3 class="ds-panel-title">Usage</h3><span class="ds-count">3</span></div>
+        <div class="ds-panel-body"><table class="ds-table"><thead><tr><th scope="col">Pass</th><th scope="col">Units</th></tr></thead>
+          <tbody><tr><td>P1</td><td>120</td></tr><tr><td>P2</td><td>88</td></tr><tr><td>P5</td><td>31</td></tr></tbody></table></div>
+      </article>
+      <article class="ds-panel ds-panel-overflow-visible" id="panel-visible">
+        <div class="ds-panel-head"><h3 class="ds-panel-title">Overflow visible</h3><code>.ds-panel-overflow-visible</code></div>
+        <div class="ds-panel-body"><p>Content that sticks out is shown, not clipped (also <code>.ds-panel-overflow-auto</code> to scroll).</p>
+          <span class="ds-badge" style="margin-right:-40px">Sticks out</span></div>
+      </article>
+    </div>
+    <div class="ds-table-card g-table">
+      <table class="ds-table ds-table-interactive">
+        <caption class="visually-hidden">Sections</caption>
+        <thead><tr><th scope="col">Section</th><th scope="col">Processing</th><th scope="col">Status</th></tr></thead>
+        <tbody>
+          <tr><td>Chapter 1</td><td>Full</td><td><span class="ds-status-dot" data-status="done" aria-hidden="true"></span>Done</td></tr>
+          <tr><td>Chapter 2</td><td>Translate only</td><td><span class="ds-status-dot" data-status="running" aria-hidden="true"></span>Running</td></tr>
+          <tr><td>Index</td><td>Excluded</td><td>—</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section aria-labelledby="forms">
+    <h2 id="forms">Form fields</h2>
+    <p><code>.ds-field</code> wraps a <code>&lt;label&gt;</code> and a control; <code>.ds-field-hint</code> and <code>.ds-field-error</code> are linked with <code>aria-describedby</code>; invalid state is <code>aria-invalid="true"</code>.</p>
+    <div class="ds-field-row">
+      <div class="ds-field"><label for="f-title">Title</label><input id="f-title" value="Offline Book" aria-describedby="f-title-hint"><small class="ds-field-hint" id="f-title-hint">Shown in the Library and on the published EPUB.</small></div>
+      <div class="ds-field"><label for="f-lang">Target language</label><select id="f-lang"><option>Polish</option><option>German</option></select></div>
+    </div>
+    <div class="ds-field-row">
+      <div class="ds-field"><label for="f-label">Label</label><input id="f-label" value="" aria-invalid="true" aria-describedby="f-label-error"><small class="ds-field-error" id="f-label-error">Enter a label.</small></div>
+      <div class="ds-field"><label for="f-model">Model (locked)</label><input id="f-model" value="local" disabled></div>
+    </div>
+    <p style="margin-top:var(--ds-space-6)">Outside a field: <code>.ds-input</code>, <code>.ds-select</code> (native picker) and <code>.ds-textarea</code>, each labelled by its own <code>&lt;label&gt;</code>.</p>
+    <div class="g-row">
+      <label for="s-sort" class="visually-hidden">Sort order</label>
+      <select class="ds-select" id="s-sort"><option>Name</option><option>Last active</option></select>
+      <label for="s-dir" class="visually-hidden">Direction (locked)</label>
+      <select class="ds-select" id="s-dir" disabled><option>Ascending</option></select>
+      <label for="s-branch" class="visually-hidden">Branch</label>
+      <input class="ds-input" id="s-branch" placeholder="main">
+      <label for="s-bad" class="visually-hidden">Invalid input</label>
+      <input class="ds-input" id="s-bad" value="no spaces" aria-invalid="true">
+    </div>
+    <div style="margin-top:var(--ds-space-5);max-width:520px">
+      <label for="s-notes" class="visually-hidden">Notes</label>
+      <textarea class="ds-textarea" id="s-notes" placeholder="One email per line"></textarea>
+    </div>
+  </section>
+
+  <section aria-labelledby="dialogs">
+    <h2 id="dialogs">Dialog</h2>
+    <p><code>&lt;dialog class="ds-dialog" aria-labelledby&gt;</code> opened with <code>showModal()</code>: the browser makes the page inert, keeps focus inside,
+      closes on <kbd>Esc</kbd> and returns focus. <code>.ds-dialog-title</code> and <code>.ds-dialog-actions</code> lay it out.</p>
+    <button type="button" class="ds-btn ds-btn-danger" id="dialog-open">Delete workspace…</button>
+    <dialog class="ds-dialog" id="dialog-demo" aria-labelledby="dialog-demo-title" closedby="any">
+      <h3 class="ds-dialog-title" id="dialog-demo-title">Delete workspace?</h3>
+      <p>All translations and reviews in this workspace are removed.</p>
+      <form method="dialog" class="ds-dialog-actions">
+        <button class="ds-btn" value="cancel">Cancel</button>
+        <button class="ds-btn ds-btn-danger" value="delete">Delete</button>
+      </form>
+    </dialog>
+  </section>
+
+  <section aria-labelledby="segmented">
+    <h2 id="segmented">Segmented control</h2>
+    <p><code>.ds-segmented</code> with <code>role="group"</code> and an <code>aria-label</code>; each option is a <code>&lt;button aria-pressed&gt;</code>.</p>
+    <div class="ds-segmented" role="group" aria-label="Section filter" id="filter" style="display:inline-flex">
+      <button type="button" aria-pressed="true">All</button>
+      <button type="button" aria-pressed="false">Full</button>
+      <button type="button" aria-pressed="false">Translate only</button>
+      <button type="button" aria-pressed="false">Excluded</button>
+    </div>
+  </section>
+
+  <section aria-labelledby="empty">
+    <h2 id="empty">Empty state</h2>
+    <div class="ds-empty">No workspaces yet. Add a book to start.</div>
+  </section>
+
+  <section aria-labelledby="tokens">
+    <h2 id="tokens">Tokens</h2>
+    <p>Colors from <code>themes.css</code> (switch the theme above); scale tokens from <code>tokens.css</code>.</p>
+    <div class="g-swatches" id="swatches"></div>
+    <h3 style="margin:var(--ds-space-8) 0 var(--ds-space-5)">Spacing</h3>
+    <div id="spaces"></div>
+    <h3 style="margin:var(--ds-space-8) 0 var(--ds-space-5)">Radius</h3>
+    <div class="g-radius" id="radii"></div>
+  </section>
+</div>
+<script>
+  // Gallery controls only. The design-system CSS itself needs no JavaScript.
+  const root = document.documentElement
+  const setTheme = value => {
+    root.dataset.theme = value
+    for (const b of document.querySelectorAll('#theme button')) b.setAttribute('aria-pressed', String(b.dataset.themeValue === value))
+  }
+  for (const b of document.querySelectorAll('#theme button')) b.addEventListener('click', () => setTheme(b.dataset.themeValue))
+  setTheme(new URLSearchParams(location.search).get('theme') === 'light' ? 'light' : 'dark')
+  for (const b of document.querySelectorAll('#filter button')) b.addEventListener('click', () => {
+    for (const o of document.querySelectorAll('#filter button')) o.setAttribute('aria-pressed', String(o === b))
+  })
+  const dialog = document.getElementById('dialog-demo')
+  document.getElementById('dialog-open').addEventListener('click', () => dialog.showModal())
+  // Accent hook: one custom property per theme, no theme selectors needed.
+  const accent = document.getElementById('accent')
+  accent.addEventListener('input', () => {
+    for (const t of ['dark', 'light']) {
+      root.style.setProperty(`--ds-accent-${t}`, accent.value)
+      root.style.setProperty(`--ds-accent-soft-${t}`, `color-mix(in srgb, ${accent.value} 14%, transparent)`)
+    }
+  })
+  document.getElementById('accent-reset').addEventListener('click', () => {
+    for (const t of ['dark', 'light']) { root.style.removeProperty(`--ds-accent-${t}`); root.style.removeProperty(`--ds-accent-soft-${t}`) }
+    accent.value = '#4f9dea'
+  })
+  const swatches = ['bg', 'bg-soft', 'bg-inset', 'panel', 'panel-2', 'panel-3', 'line', 'line-strong', 'text', 'text-soft', 'text-dim',
+    'accent', 'accent-soft', 'success', 'success-soft', 'danger', 'danger-soft', 'warning', 'warning-soft']
+  document.getElementById('swatches').append(...swatches.map(name => {
+    const el = document.createElement('div'); el.className = 'g-swatch'
+    el.innerHTML = `<span style="background:var(--${name})"></span><code>--${name}</code>`
+    return el
+  }))
+  document.getElementById('spaces').append(...Array.from({ length: 11 }, (_, i) => {
+    const el = document.createElement('div'); el.className = 'g-space'
+    el.innerHTML = `<code>--ds-space-${i + 1}</code><span style="width:var(--ds-space-${i + 1})"></span>`
+    return el
+  }))
+  document.getElementById('radii').append(...['xs', 'control', 'sm', 'md', 'lg', 'xl', 'pill'].map(name => {
+    const el = document.createElement('div'); el.style.borderRadius = `var(--ds-radius-${name})`; el.textContent = name
+    return el
+  }))
+</script>
+</body>
+</html>

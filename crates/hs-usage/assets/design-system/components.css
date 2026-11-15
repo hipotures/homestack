@@ -1,0 +1,194 @@
+/* Design-system primitives: .ds-btn (+ -primary, -ghost, -danger, -compact), .ds-icon-btn, .ds-panel (+ -head, -title,
+   -body, -overflow-visible, -overflow-auto), .ds-table-card, .ds-table, .ds-progress, .ds-badge, .ds-count,
+   .ds-status-dot, .ds-notice, .ds-field (+ -row, -hint, -error), .ds-input, .ds-select, .ds-textarea, .ds-segmented,
+   .ds-dialog (+ -title, -actions), .ds-empty. Plain classes plus native and ARIA state (:disabled, aria-pressed,
+   aria-invalid) and data-tone / data-status. No JavaScript, no build step; needs tokens.css and themes.css.
+   Behavior notes: hover never restyles a disabled control, every button variant has a disabled look, and the
+   primary hover lift is dropped under prefers-reduced-motion. */
+
+/* ---- Resets ---------------------------------------------------------------------------------------------- */
+/* Zero specificity (:where): they only replace browser defaults, so the primitives look the same with or without a
+   CSS reset such as Tailwind preflight, and any application rule still wins. */
+:where(.ds-btn, .ds-icon-btn, .ds-segmented, .ds-segmented button, .ds-panel, .ds-panel-head, .ds-panel-body, .ds-table-card,
+  .ds-table, .ds-badge, .ds-count, .ds-status-dot, .ds-notice, .ds-field, .ds-field-row, .ds-field input, .ds-field select,
+  .ds-field textarea, .ds-field-hint, .ds-field-error, .ds-panel-title, .ds-empty, .ds-progress, .ds-input, .ds-select,
+  .ds-textarea, .ds-dialog, .ds-dialog-title, .ds-dialog-actions) { box-sizing:border-box; }
+:where(.ds-btn, .ds-icon-btn, .ds-segmented button, .ds-field input, .ds-field select, .ds-field textarea, button.ds-panel-head,
+  .ds-input, .ds-select, .ds-textarea) {
+  margin:0; font:inherit; color:inherit;
+}
+/* Control text size. Unset, it stays the inherited size (1em), so the primitives follow the page as before. An
+   application whose body text is larger than its controls sets --ds-control-font-size (for example
+   var(--ds-text-base)). Size modifiers such as .ds-btn-compact still win. */
+:where(.ds-btn, .ds-field input, .ds-field select, .ds-field textarea, .ds-input, .ds-select, .ds-textarea) {
+  font-size:var(--ds-control-font-size, 1em);
+}
+/* Icon and text: an inline <svg> child is laid out next to the label with a fixed gap. Zero specificity, so a
+   layout rule of the application still wins. Give decorative icons aria-hidden="true". */
+:where(.ds-btn, .ds-segmented button):has(> svg) {
+  display:inline-flex; align-items:center; gap:var(--ds-space-3);
+}
+:where(a.ds-btn) { text-decoration:none; }
+:where(.ds-icon-btn) { padding:0; }
+:where(.ds-panel-title) { margin:0; font-weight:var(--ds-weight-bold); }
+:where(.ds-notice p) { margin:0; }
+
+/* ---- Buttons ---------------------------------------------------------------------------------------------- */
+.ds-btn, .ds-icon-btn {
+  border:1px solid var(--line);
+  border-radius:var(--ds-radius-sm);
+  cursor:pointer;
+  transition:var(--ds-duration-base) var(--ds-ease);
+}
+.ds-btn { background:var(--panel); padding:9px 15px; font-weight:var(--ds-weight-semibold); }
+.ds-btn-primary { background:var(--accent); border-color:transparent; color:#fff; font-weight:var(--ds-weight-bold); }
+.ds-btn-danger {
+  background:var(--red-soft); border-color:color-mix(in srgb,var(--red) 55%,var(--line)); color:var(--red);
+  font-weight:var(--ds-weight-bold);
+}
+.ds-btn-ghost { background:transparent; padding:var(--ds-space-4) var(--ds-space-6); color:var(--text-soft); font-weight:inherit; }
+.ds-btn-compact { padding:var(--ds-space-3) var(--ds-space-5); font-size:var(--ds-text-md); }
+.ds-icon-btn {
+  width:36px; height:36px; background:var(--panel); display:grid; place-items:center; color:var(--text-soft);
+  font-size:var(--ds-text-lg);
+}
+/* State conditions sit in :where() so a state rule weighs (0,2,0), like `.x .ds-btn` context rules in applications. */
+.ds-icon-btn:hover:where(:not(:disabled)), .ds-btn:hover:where(:not(:disabled, .ds-btn-primary, .ds-btn-danger)) {
+  border-color:var(--line-strong); background:var(--panel-2);
+}
+.ds-btn-primary:hover:where(:not(:disabled)) { filter:brightness(1.07); transform:translateY(-1px); }
+.ds-btn:disabled, .ds-icon-btn:disabled { opacity:.45; cursor:not-allowed; transform:none; }
+@media (prefers-reduced-motion: reduce) {
+  .ds-btn-primary:hover:where(:not(:disabled)) { transform:none; }
+}
+
+/* ---- Panels and cards ------------------------------------------------------------------------------------- */
+.ds-panel { border:1px solid var(--line); background:var(--panel); border-radius:var(--ds-radius-lg); overflow:hidden; min-width:0; }
+/* The panel clips by default (rounded corners, tables). For content that may stick out (menus, wide controls on
+   narrow screens), let it show or scroll instead. */
+.ds-panel-overflow-visible { overflow:visible; }
+.ds-panel-overflow-auto { overflow:auto; }
+.ds-panel-head {
+  padding:13px 15px; border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between;
+  gap:var(--ds-space-6);
+}
+.ds-panel-title { font-size:var(--ds-text-base); }
+.ds-panel-body { padding:14px 15px; }
+.ds-panel-body:has(> table) { padding:0; }
+.ds-table-card {
+  margin-top:10px; border:1px solid var(--line); border-radius:var(--ds-radius); background:var(--panel); overflow:hidden;
+  box-shadow:var(--shadow);
+}
+
+/* ---- Tables (opt-in: <table class="ds-table">) ----------------------------------------------------------- */
+/* Selectors weigh like element rules ((0,0,1)), so an application's own table rules keep working. */
+:where(.ds-table) { width:100%; border-collapse:collapse; table-layout:fixed; }
+:where(.ds-table) th {
+  text-align:left; color:var(--text-dim); font-size:var(--ds-text-xs); text-transform:uppercase; letter-spacing:.08em;
+  padding:11px 12px; background:var(--panel-2); border-bottom:1px solid var(--line); font-weight:750;
+}
+:where(.ds-table) td {
+  padding:var(--ds-space-5) var(--ds-space-6); border-bottom:1px solid var(--line); font-size:var(--ds-text-md); vertical-align:middle;
+}
+:where(.ds-table) tbody tr:last-child td { border-bottom:0; }
+/* Rows that act as links or buttons: .ds-table-interactive on the table. */
+:where(.ds-table-interactive) tbody tr { cursor:pointer; transition:var(--ds-duration-fast) var(--ds-ease); }
+:where(.ds-table-interactive) tbody tr:hover { background:var(--panel-2); }
+
+/* ---- Progress (opt-in: <progress class="ds-progress">) --------------------------------------------------- */
+:where(.ds-progress) { appearance:none; width:100%; height:6px; border:0; border-radius:20px; overflow:hidden; background:var(--panel-3); }
+:where(.ds-progress)::-webkit-progress-bar { background:var(--panel-3); }
+:where(.ds-progress)::-webkit-progress-value { background:var(--accent); border-radius:20px; }
+:where(.ds-progress)::-moz-progress-bar { background:var(--accent); }
+:where(.ds-progress):indeterminate { opacity:.4; }
+
+/* ---- Badges and status ------------------------------------------------------------------------------------ */
+.ds-badge {
+  display:inline-flex; align-items:center; gap:7px; padding:var(--ds-space-3) var(--ds-space-5); border-radius:var(--ds-radius-pill);
+  border:1px solid var(--line); background:var(--panel); font-size:var(--ds-text-sm); font-weight:var(--ds-weight-bold);
+  color:var(--text-soft); white-space:nowrap;
+}
+.ds-badge[data-tone="success"] { color:var(--green); border-color:color-mix(in srgb,var(--green) 40%,var(--line)); background:color-mix(in srgb,var(--green) 9%,var(--panel)); }
+.ds-badge[data-tone="accent"] { color:var(--accent); border-color:color-mix(in srgb,var(--accent) 40%,var(--line)); background:var(--accent-soft); }
+.ds-badge[data-tone="warning"] { color:var(--amber); border-color:color-mix(in srgb,var(--amber) 40%,var(--line)); background:var(--amber-soft); }
+/* data-tone="neutral" (or no tone) is the default look above. */
+.ds-badge[data-tone="danger"] { color:var(--red); border-color:color-mix(in srgb,var(--red) 42%,var(--line)); background:var(--red-soft); }
+.ds-count {
+  font-size:var(--ds-text-sm); color:var(--text-dim); border:1px solid var(--line); background:var(--panel); padding:2px 7px;
+  border-radius:20px;
+}
+.ds-status-dot { width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:6px; background:var(--text-dim); }
+.ds-status-dot[data-status="running"] { background:var(--accent); box-shadow:0 0 0 4px var(--accent-soft); }
+.ds-status-dot[data-status="waiting"] { background:var(--amber); }
+.ds-status-dot[data-status="error"] { background:var(--red); }
+.ds-status-dot[data-status="done"] { background:var(--green); }
+
+/* ---- Notices ---------------------------------------------------------------------------------------------- */
+.ds-notice {
+  margin-top:14px; border:1px solid color-mix(in srgb,var(--amber) 36%,var(--line)); background:var(--amber-soft);
+  border-radius:var(--ds-radius-sm); padding:13px 14px; display:flex; align-items:center; justify-content:space-between; gap:18px;
+}
+.ds-notice[data-tone="danger"] { background:var(--red-soft); border-color:color-mix(in srgb,var(--red) 40%,var(--line)); }
+.ds-notice strong { font-size:var(--ds-text-md); }
+.ds-notice p { color:var(--text-soft); font-size:12.5px; margin-top:3px; }
+@media (max-width:720px) {
+  .ds-notice { flex-wrap:wrap; }
+}
+
+/* ---- Form fields ------------------------------------------------------------------------------------------ */
+.ds-field { margin-bottom:16px; }
+.ds-field > label {
+  display:block; font-size:var(--ds-text-sm); color:var(--text-dim); font-weight:var(--ds-weight-semibold); margin-bottom:7px;
+}
+.ds-field :is(input, select, textarea) {
+  width:100%; background:var(--panel-2); border:1px solid var(--line); border-radius:var(--ds-radius-control); color:var(--text);
+  padding:9px 10px;
+}
+.ds-field :is(input, select, textarea):disabled { opacity:.6; cursor:not-allowed; }
+.ds-field :is(input, select, textarea)[aria-invalid="true"] { border-color:color-mix(in srgb,var(--red) 70%,var(--line)); }
+.ds-field-hint { display:block; margin-top:6px; color:var(--text-dim); font-size:11px; line-height:1.45; }
+.ds-field-error { display:block; margin-top:6px; color:var(--red); font-size:11px; line-height:1.45; }
+.ds-field-row { display:grid; grid-template-columns:1fr 1fr; gap:var(--ds-space-6); }
+
+/* Standalone controls: the field look for an <input>, <select> or <textarea> outside .ds-field (for example a
+   control next to its description). They keep their intrinsic width; .ds-textarea fills its container. The native
+   <select> picker is kept on purpose (it follows color-scheme and keeps the platform picker on mobile). */
+.ds-input, .ds-select, .ds-textarea {
+  max-width:100%; background:var(--panel-2); border:1px solid var(--line); border-radius:var(--ds-radius-control); color:var(--text);
+  padding:9px 10px;
+}
+.ds-select { cursor:pointer; }
+.ds-textarea { display:block; width:100%; min-height:6em; line-height:1.45; resize:vertical; }
+:is(.ds-input, .ds-textarea)::placeholder { color:var(--text-dim); opacity:1; }
+:is(.ds-input, .ds-select, .ds-textarea):disabled { opacity:.6; cursor:not-allowed; }
+:is(.ds-input, .ds-select, .ds-textarea)[aria-invalid="true"] { border-color:color-mix(in srgb,var(--red) 70%,var(--line)); }
+
+/* ---- Segmented control ------------------------------------------------------------------------------------ */
+/* A group of <button aria-pressed> toggles (role="group" + aria-label on the container). */
+.ds-segmented { display:flex; background:var(--panel); border:1px solid var(--line); padding:3px; border-radius:var(--ds-radius-sm); }
+.ds-segmented button {
+  border:0; background:transparent; color:var(--text-dim); padding:var(--ds-space-3) var(--ds-space-5); border-radius:var(--ds-radius-xs);
+  cursor:pointer; font-size:var(--ds-text-sm);
+}
+.ds-segmented button[aria-pressed="true"] { background:var(--panel-3); color:var(--text); }
+
+/* ---- Dialog ----------------------------------------------------------------------------------------------- */
+/* <dialog class="ds-dialog" aria-labelledby="…"> opened with showModal() (or command="show-modal"). The browser
+   provides the modal semantics, focus containment, Esc and focus return: add no role, aria-modal or focus trap.
+   Close it with <form method="dialog"> buttons or dialog.close(); closedby="any" adds click-outside dismissal. */
+.ds-dialog {
+  width:min(480px, calc(100vw - 32px)); max-height:calc(100dvh - 32px); margin:auto; padding:var(--ds-space-9); border:1px solid var(--line);
+  border-radius:var(--ds-radius-lg); background:var(--panel); color:var(--text); box-shadow:var(--shadow);
+}
+/* Keep scroll gestures from reaching the page behind the modal (progressive enhancement where unsupported). */
+.ds-dialog:modal { overscroll-behavior:contain; }
+/* Literal colors: older browsers do not pass custom properties to ::backdrop. */
+.ds-dialog::backdrop { background:rgba(0,0,0,.55); overflow:hidden; overscroll-behavior:contain; }
+.ds-dialog-title { margin:0 0 var(--ds-space-6); font-size:var(--ds-text-lg); font-weight:var(--ds-weight-bold); }
+.ds-dialog-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:var(--ds-space-4); margin-top:var(--ds-space-9); }
+
+/* ---- Empty state ------------------------------------------------------------------------------------------ */
+.ds-empty {
+  color:var(--text-dim); font-size:var(--ds-text-md); padding:26px; text-align:center; border:1px dashed var(--line);
+  border-radius:var(--ds-radius-md);
+}

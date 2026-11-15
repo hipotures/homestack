@@ -1,0 +1,5 @@
+/* Optional document defaults for a page built on the design system. Not part of ds.css: import it only when the
+   design system owns the whole page. Every rule has zero specificity (:where), so any page rule overrides it. */
+:where(html) { background:var(--bg); color:var(--text); font-family:var(--ds-font-sans); line-height:normal; }
+:where(body) { margin:0; }
+:where(*, *::before, *::after) { box-sizing:border-box; }

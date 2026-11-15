@@ -1,0 +1,7 @@
+/* Public entry point of the design system: tokens, dark/light themes, primitives and the focus ring.
+   Plain CSS; browsers resolve these imports themselves, so no bundler is needed. base.css (document defaults) is
+   optional and separate. */
+@import url("tokens.css");
+@import url("themes.css");
+@import url("components.css");
+@import url("state.css");
