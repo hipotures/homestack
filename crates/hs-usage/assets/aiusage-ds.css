@@ -32,6 +32,10 @@
   .range > .ds-segmented { max-width: 100%; overflow-x: auto; }
 }
 .ds-segmented button { white-space: nowrap; }
+/* Header controls keep the AI Usage control height (40px; the package's are 37-38px), so the header and everything
+ * below it stay where they were, also when the controls wrap into several rows on phones. */
+.controls > :is(.ds-select, .ds-btn), .range > .ds-segmented { min-height: 40px; }
+.controls > :is(.ds-select, .ds-btn) { padding-block: 0; }
 
 /* Live indicator: the status dot sits in a flex row with its own gap. */
 .live .ds-status-dot { margin-right: 0; }
@@ -40,11 +44,13 @@
 #error { margin-top: 0; justify-content: flex-start; gap: 0; }
 #error::before { content: "⚠\00a0"; color: var(--red); }
 
-/* Model panels: heading block, tools that wrap on narrow screens. */
+/* Model panels: heading block, tools that wrap on narrow screens. The heading grows from a 320px basis, so the tools
+ * wrap below it only when the panel is narrow, not whenever the subtitle is long. The 16px body padding (package:
+ * 14px) keeps the panels as tall as the former cards, so the sections below them do not move. */
 .ds-panel-head { flex-wrap: wrap; }
-.panel-heading { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.panel-heading { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1 1 320px; }
 .ds-panel .sub { font-size: var(--fs-small); color: var(--muted); }
-.ds-panel-body { display: flex; flex-direction: column; gap: 16px; }
+.ds-panel-body { display: flex; flex-direction: column; gap: 16px; padding-block: 16px; }
 
 /* Data tables (the scrolling wrapper is a focusable, labelled region for keyboard scrolling): dense rows with the numbers right-aligned, a sticky header and columns sized to their content. */
 .table-wrap .ds-table { table-layout: auto; font-variant-numeric: tabular-nums; }
