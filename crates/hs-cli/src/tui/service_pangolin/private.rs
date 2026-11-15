@@ -315,6 +315,7 @@ fn check_private(row: &Value, body: &Value, admin: &Value) -> Result<(), String>
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn review(
     api: &Api<'_>,
     catalog: &Catalog,

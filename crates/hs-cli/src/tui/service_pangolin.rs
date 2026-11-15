@@ -888,7 +888,7 @@ fn plan_with_api(
     let public_snapshot = if publication.paired {
         resource
             .as_ref()
-            .map(|r| private::public_snapshot(&api, r, &domain_id, &publication.subdomain))
+            .map(|r| private::public_snapshot(api, r, &domain_id, &publication.subdomain))
             .transpose()?
     } else {
         None
@@ -983,7 +983,7 @@ fn plan_with_api(
     private_target["ip"] = json!(backend);
     let private = if publication.paired {
         Some(private::review(
-            &api,
+            api,
             &catalog,
             source,
             &publication,
@@ -1082,11 +1082,11 @@ impl Plan {
                 }
             }
         }
-        if let Some(private) = &self.private {
-            if private.existing.is_none() {
-                lines.push(format!("Private Resource: missing → CREATE https://{}", self.domain));
-                lines.extend(private.lines(&self.domain).into_iter().skip(1));
-            }
+        if let Some(private) = &self.private
+            && private.existing.is_none()
+        {
+            lines.push(format!("Private Resource: missing → CREATE https://{}", self.domain));
+            lines.extend(private.lines(&self.domain).into_iter().skip(1));
         }
         lines.extend(
             self.bypass
@@ -1251,17 +1251,17 @@ fn route_with_api(api: &Api<'_>, plan: &Plan) -> Result<Vec<String>, String> {
     }
     api.validate(plan.resource.as_ref(), &plan.site)?;
     if let Some(private) = &plan.private {
-        private.validate(&api, &catalog, plan)?;
+        private.validate(api, &catalog, plan)?;
     }
-    if let (Some(snapshot), Some(resource)) = (&plan.public_snapshot, &plan.resource) {
-        if private::public_snapshot(&api, resource, &plan.domain_id, &plan.publication.subdomain)? != *snapshot {
-            return Err("The Public Resource or its access policies changed since review; review again".into());
-        }
+    if let (Some(snapshot), Some(resource)) = (&plan.public_snapshot, &plan.resource)
+        && private::public_snapshot(api, resource, &plan.domain_id, &plan.publication.subdomain)? != *snapshot
+    {
+        return Err("The Public Resource or its access policies changed since review; review again".into());
     }
     if plan.keep_public {
         let mut lines = vec!["Public Resource, target, SSO, policies and health settings preserved".into()];
         if let Some(private) = &plan.private {
-            lines.extend(private.apply(&api, plan)?);
+            lines.extend(private.apply(api, plan)?);
         }
         return Ok(lines);
     }
@@ -1313,7 +1313,7 @@ fn route_with_api(api: &Api<'_>, plan: &Plan) -> Result<Vec<String>, String> {
         return Err("Pangolin rules changed since review; review again".to_owned());
     }
     if !plan.target_unchanged() {
-        save_target(&api, plan, resource)?;
+        save_target(api, plan, resource)?;
     }
     lines.push(format!(
         "https://{} routed through {} to {}:{}{}",
@@ -1345,7 +1345,7 @@ fn route_with_api(api: &Api<'_>, plan: &Plan) -> Result<Vec<String>, String> {
         return Err("Saved Pangolin rules do not match the review; inspect the resource rules".to_owned());
     }
     if let Some(private) = &plan.private {
-        lines.extend(private.apply(&api, plan)?);
+        lines.extend(private.apply(api, plan)?);
     }
     Ok(lines)
 }
