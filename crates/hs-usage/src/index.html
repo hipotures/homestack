@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="ai-usage-version" content="__HOMESTACK_USAGE_VERSION__"><meta name="viewport" content="width=device-width, initial-scale=1"><title>AI usage</title><link rel="icon" href="/assets/favicon.ico?v=__HOMESTACK_USAGE_VERSION__" sizes="any"><link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=__HOMESTACK_USAGE_VERSION__"><link rel="apple-touch-icon" href="/assets/favicon-180.png?v=__HOMESTACK_USAGE_VERSION__"><link rel="manifest" href="/assets/manifest.webmanifest?v=__HOMESTACK_USAGE_VERSION__"><link rel="stylesheet" href="/assets/aiusage-tokens.css?v=__HOMESTACK_USAGE_VERSION__"><style>
+<html lang="en"><head><meta charset="utf-8"><meta name="ai-usage-version" content="__HOMESTACK_USAGE_VERSION__"><meta name="viewport" content="width=device-width, initial-scale=1"><title>AI usage</title><link rel="icon" href="/assets/favicon.ico?v=__HOMESTACK_USAGE_VERSION__" sizes="any"><link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=__HOMESTACK_USAGE_VERSION__"><link rel="apple-touch-icon" href="/assets/favicon-180.png?v=__HOMESTACK_USAGE_VERSION__"><link rel="manifest" href="/assets/manifest.webmanifest?v=__HOMESTACK_USAGE_VERSION__"><link rel="stylesheet" href="/assets/design-system/ds.css?v=__HOMESTACK_USAGE_VERSION__"><link rel="stylesheet" href="/assets/aiusage-tokens.css?v=__HOMESTACK_USAGE_VERSION__"><link rel="stylesheet" href="/assets/aiusage-ds.css?v=__HOMESTACK_USAGE_VERSION__"><style>
 * { box-sizing: border-box; }
 body { font-variant-numeric: tabular-nums; overflow-x: hidden; }
 .row-2 { grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); }
@@ -9,22 +9,18 @@ h1 { font-size: 20px; margin: 0; font-weight: 600; letter-spacing: -.01em; }
 .top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; }
 .brand, .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; min-width: 0; }
 .live { display: inline-flex; align-items: center; gap: 8px; font-size: var(--fs-small); color: var(--muted); }
-.live.stale .live-dot { background: var(--warn); box-shadow: none; }
-.scope { font: inherit; font-size: 13px; color: var(--text-2); background: transparent; border: 1px solid var(--border-strong); border-radius: var(--radius-ctl); min-height: 40px; padding: 0 10px; max-width: 200px; }
-.scope option { background: var(--surface-3); color: var(--text); }
+.scope { max-width: 200px; }
+select option { background: var(--surface-3); color: var(--text); }
 .theme { cursor: pointer; }
 .range { position: relative; max-width: 100%; }
 .menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 5; width: 220px; padding: 6px; background: var(--surface-3); border: 1px solid var(--border-strong); border-radius: 12px; box-shadow: 0 12px 32px rgba(0,0,0,.35); display: flex; flex-direction: column; gap: 2px; }
-.menu button { border: 0; text-align: left; min-height: 38px; padding: 0 12px; border-radius: 8px; background: transparent; color: var(--text); font: inherit; font-size: 13px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
-.menu button:hover:not(:disabled), .menu button.active { background: var(--surface-2); }
-.menu button:disabled { color: var(--faint); cursor: not-allowed; }
+.menu [role=menuitem] { border: 0; text-align: left; min-height: 38px; padding: 0 12px; border-radius: 8px; background: transparent; color: var(--text); font: inherit; font-size: 13px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+.menu [role=menuitem]:hover:not(:disabled), .menu [role=menuitem].active { background: var(--surface-2); }
+.menu [role=menuitem]:disabled { color: var(--faint); cursor: not-allowed; }
 .menu .hint { font-size: 11px; color: var(--faint); }
 .menu .custom { display: grid; gap: 6px; margin-top: 4px; padding: 8px 6px 2px; border-top: 1px solid var(--border); }
 .menu .custom label { display: grid; grid-template-columns: 40px 1fr; align-items: center; font-size: 12px; color: var(--muted); }
-.menu input[type=date] { font: inherit; font-size: 13px; color: var(--text); background: transparent; border: 1px solid var(--border-strong); border-radius: 8px; min-height: 34px; padding: 0 8px; }
-.menu .custom .apply { justify-content: center; min-height: 34px; background: var(--surface-2); }
-.error { border: 1px solid var(--up); border-radius: var(--radius-ctl); padding: 8px 12px; }
-.error::before { content: "⚠ "; color: var(--up); }
+.menu .custom .ds-input { font-size: 13px; }
 a { color: var(--tok-uncached); }
 .link { font: inherit; color: var(--tok-uncached); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; }
 .row-2, .kpi-grid { min-width: 0; }
@@ -114,7 +110,6 @@ a { color: var(--tok-uncached); }
 .tool { display: grid; grid-template-columns: minmax(0, 170px) minmax(0, 1fr) 60px; gap: 12px; align-items: center; font-size: 12px; }
 .tool > span:first-child { font-family: var(--font-mono); color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool .track { height: 10px; border-radius: 3px; }
-.badge { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 8px; background: color-mix(in srgb, var(--warn) 12%, transparent); font-size: var(--fs-small); color: var(--warn); }
 .empty { padding: 28px; gap: 22px; }
 .empty h3 { margin: 0; font-size: 16px; }
 .empty p { margin: 0; font-size: 13px; color: var(--text-2); }
@@ -128,14 +123,14 @@ a { color: var(--tok-uncached); }
 .card .unit { color: var(--muted); font-size: 12px; }
 .card .toggle { font: inherit; font-size: 12px; color: var(--text-2); background: none; border: none; cursor: pointer; text-decoration: underline; }
 .card-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
-.copy { font: inherit; font-size: 12px; color: var(--text-2); background: none; border: 1px solid var(--border-strong); border-radius: 4px; padding: 2px 6px; cursor: pointer; }
+.card .copy { font: inherit; font-size: 12px; color: var(--text-2); background: none; border: 1px solid var(--border-strong); border-radius: 4px; padding: 2px 6px; cursor: pointer; }
 .card .note { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .table-wrap { overflow-x: auto; max-height: 260px; overflow-y: auto; }
-table { border-collapse: collapse; font-size: 12px; width: 100%; font-variant-numeric: tabular-nums; }
-th, td { text-align: right; padding: 3px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
-th:first-child, td:first-child { text-align: left; }
-th { color: var(--text-2); font-weight: 600; position: sticky; top: 0; background: var(--surface); }
-button:focus-visible, select:focus-visible { outline: 2px solid var(--codex); outline-offset: 2px; }
+table:not(.ds-table) { border-collapse: collapse; font-size: 12px; width: 100%; font-variant-numeric: tabular-nums; }
+:where(table:not(.ds-table)) :is(th, td) { text-align: right; padding: 3px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+:where(table:not(.ds-table)) :is(th, td):first-child { text-align: left; }
+:where(table:not(.ds-table)) th { color: var(--text-2); font-weight: 600; position: sticky; top: 0; background: var(--surface); }
+button:not(.ds-btn, .ds-icon-btn, .ds-segmented button):focus-visible, select:not(.ds-select):focus-visible { outline: 2px solid var(--codex); outline-offset: 2px; }
 /* Phones: switches scroll sideways, grids collapse, the page never scrolls horizontally. */
 @media (max-width: 640px) {
   .controls, .range { width: 100%; }
@@ -164,10 +159,10 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--codex); ou
  data-init="window.usage.restore(el)"
  data-effect="@get('/api/dashboard/events', {payload:{agent:$agent,host:$host,project:$project,range:$range,epoch:window.usage.select({agent:$agent,host:$host,project:$project,range:$range},$_sync)},openWhenHidden:true,retry:'always',retryMaxCount:1000,retryInterval:3000})">
 <header class="top">
-<div class="brand"><h1>AI usage</h1><span class="live" id="updated" aria-live="polite"><span class="live-dot" aria-hidden="true"></span><span id="updated-text">connecting…</span></span></div>
+<div class="brand"><h1>AI usage</h1><span class="live" id="updated" aria-live="polite"><span class="ds-status-dot" id="updated-dot" data-status="running" aria-hidden="true"></span><span id="updated-text">connecting…</span></span></div>
 <div class="controls">
 <div class="range" data-on:click__outside="$_more=false" data-on:keydown__window="evt.key==='Escape'&&($_more=false)">
-<div class="seg scroll" role="group" aria-label="Time range">
+<div class="ds-segmented" role="group" aria-label="Time range">
 <button type="button" data-on:click="$range='1h'" data-attr:aria-pressed="String($range==='1h')">1h</button>
 <button type="button" data-on:click="$range='24h'" data-attr:aria-pressed="String($range==='24h')">24h</button>
 <button type="button" data-on:click="$range='7d'" data-attr:aria-pressed="String($range==='7d')">7d</button>
@@ -180,19 +175,19 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--codex); ou
 <button type="button" role="menuitem" data-on:click="$range='1y';$_more=false" data-class:active="$range==='1y'">1 year</button>
 <button type="button" role="menuitem" data-on:click="$range='all';$_more=false" data-class:active="$range==='all'">All <span class="hint">retained history</span></button>
 <div class="custom" role="group" aria-label="Custom range"><span class="hint">Custom range · local days</span>
-<label>From <input type="date" id="range-from" data-bind:_from></label>
-<label>To <input type="date" id="range-to" data-bind:_to></label>
-<button type="button" class="apply" data-attr:disabled="!window.usage.custom($_from,$_to)" data-on:click="$range=window.usage.custom($_from,$_to)||$range;$_more=false" data-class:active="$range===window.usage.custom($_from,$_to)">Apply</button></div>
+<label>From <input type="date" class="ds-input" id="range-from" data-bind:_from></label>
+<label>To <input type="date" class="ds-input" id="range-to" data-bind:_to></label>
+<button type="button" class="ds-btn ds-btn-primary ds-btn-compact" data-attr:disabled="!window.usage.custom($_from,$_to)" data-on:click="$range=window.usage.custom($_from,$_to)||$range;$_more=false">Apply</button></div>
 </div>
 </div>
-<select class="scope" id="agent" aria-label="Agent" data-bind:agent><option value="all">Agents: all</option><option value="claude">Claude Code</option><option value="codex">Codex</option><option value="antigravity">Antigravity</option></select>
-<select class="scope" id="host" aria-label="Server" data-bind:host><option value="*">Servers: all</option></select>
-<select class="scope" id="project" aria-label="Project" data-bind:project><option value="*">Projects: all</option></select>
-<button class="scope theme" id="theme" type="button">Theme</button>
+<select class="ds-select scope" id="agent" aria-label="Agent" data-bind:agent><option value="all">Agents: all</option><option value="claude">Claude Code</option><option value="codex">Codex</option><option value="antigravity">Antigravity</option></select>
+<select class="ds-select scope" id="host" aria-label="Server" data-bind:host><option value="*">Servers: all</option></select>
+<select class="ds-select scope" id="project" aria-label="Project" data-bind:project><option value="*">Projects: all</option></select>
+<button class="ds-btn scope theme" id="theme" type="button">Theme</button>
 </div></header>
 <div hidden data-effect="if($_packet) window.usage.apply(JSON.parse($_packet))"></div>
 <button id="resync" type="button" hidden data-on:click="$_sync++">Resynchronize</button>
-<div class="error" id="error" role="status" hidden></div>
+<div class="ds-notice" data-tone="danger" id="error" role="status" hidden></div>
 <div class="overview" id="overview" data-ignore-morph style="display:contents">
 <section class="kpi-grid" id="kpis" aria-label="Summary"></section>
 <section class="card" id="trend" aria-label="Usage over time">
@@ -218,27 +213,33 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--codex); ou
 </section>
 <div class="row-2"><section class="card" id="composition" aria-label="Token composition"></section><section class="card" id="models" aria-label="Cost by model"></section></div>
 <div class="row-2">
-<section class="card" id="model-tokens" aria-label="Token breakdown of one model over time" hidden>
-<div class="card-top"><div><h2>Model tokens over time</h2><span class="sub" id="model-tokens-sub"></span></div>
-<div class="card-tools"><select class="scope" id="model-pick" aria-label="Model"></select><span class="card-actions"><button class="copy" type="button" hidden title="Copy data as JSON" aria-label="Copy data as JSON">⧉</button><button class="toggle" type="button">table</button></span></div></div>
+<section class="ds-panel" id="model-tokens" aria-label="Token breakdown of one model over time" hidden>
+<div class="ds-panel-head"><div class="panel-heading"><h2 class="ds-panel-title">Model tokens over time</h2><span class="sub" id="model-tokens-sub"></span></div>
+<div class="card-tools"><select class="ds-select" id="model-pick" aria-label="Model"></select><span class="card-actions"><button class="ds-icon-btn copy" type="button" hidden title="Copy data as JSON" aria-label="Copy data as JSON">⧉</button><button class="ds-btn ds-btn-ghost ds-btn-compact toggle" type="button">table</button></span></div></div>
+<div class="ds-panel-body">
 <div class="chips" id="model-tokens-chips"></div>
 <div class="chart" id="model-tokens-chart" role="img" aria-label="Token categories of the selected model, stacked per bucket"></div>
 <div class="table-wrap" hidden></div>
+</div>
 </section>
-<section class="card" id="model-hit" aria-label="Cache hit by model over time" hidden>
-<div class="card-top"><div><h2>Cache hit by model</h2><span class="sub" id="model-hit-sub"></span></div>
-<div class="card-tools"><span class="card-actions"><button class="copy" type="button" hidden title="Copy data as JSON" aria-label="Copy data as JSON">⧉</button><button class="toggle" type="button">table</button></span></div></div>
+<section class="ds-panel" id="model-hit" aria-label="Cache hit by model over time" hidden>
+<div class="ds-panel-head"><div class="panel-heading"><h2 class="ds-panel-title">Cache hit by model</h2><span class="sub" id="model-hit-sub"></span></div>
+<div class="card-tools"><span class="card-actions"><button class="ds-icon-btn copy" type="button" hidden title="Copy data as JSON" aria-label="Copy data as JSON">⧉</button><button class="ds-btn ds-btn-ghost ds-btn-compact toggle" type="button">table</button></span></div></div>
+<div class="ds-panel-body">
 <div class="chips" id="model-hit-chips"></div>
 <div class="chart" id="model-hit-chart" role="img" aria-label="Cache hit rate per model and bucket"></div>
 <div class="table-wrap" hidden></div>
+</div>
 </section>
 </div>
-<section class="card" id="model-effort" aria-label="Tokens by reasoning effort over time" hidden>
-<div class="card-top"><div><h2>Tokens by effort</h2><span class="sub" id="model-effort-sub"></span></div>
-<div class="card-tools"><span class="card-actions"><button class="copy" type="button" hidden title="Copy data as JSON" aria-label="Copy data as JSON">⧉</button><button class="toggle" type="button">table</button></span></div></div>
+<section class="ds-panel" id="model-effort" aria-label="Tokens by reasoning effort over time" hidden>
+<div class="ds-panel-head"><div class="panel-heading"><h2 class="ds-panel-title">Tokens by effort</h2><span class="sub" id="model-effort-sub"></span></div>
+<div class="card-tools"><span class="card-actions"><button class="ds-icon-btn copy" type="button" hidden title="Copy data as JSON" aria-label="Copy data as JSON">⧉</button><button class="ds-btn ds-btn-ghost ds-btn-compact toggle" type="button">table</button></span></div></div>
+<div class="ds-panel-body">
 <div class="chips" id="model-effort-chips"></div>
 <div class="chart" id="model-effort-chart" role="img" aria-label="Tokens per reasoning effort level, stacked per bucket"></div>
 <div class="table-wrap" hidden></div>
+</div>
 </section>
 <div class="row-3">
 <section class="card heat-card" aria-label="Estimated active hours and token activity">

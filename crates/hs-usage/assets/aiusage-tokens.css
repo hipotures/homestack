@@ -155,12 +155,8 @@ body {
 .seg button[aria-pressed="true"] { background: var(--surface-3); color: var(--text); font-weight: 600; }
 .seg .sep { width: 1px; margin: 7px 4px; background: var(--border-strong); }
 
-button:focus-visible, a:focus-visible { outline: 2px solid var(--codex); outline-offset: 2px; }
-
-.live-dot {
-  width: 8px; height: 8px; border-radius: 50%;
-  background: var(--codex); box-shadow: 0 0 0 4px color-mix(in srgb, var(--codex) 20%, transparent);
-}
+/* Design-system controls (ds- classes) use the package focus ring instead. */
+button:not(.ds-btn, .ds-icon-btn, .ds-segmented button):focus-visible, a:focus-visible { outline: 2px solid var(--codex); outline-offset: 2px; }
 
 /* phones: range control scrolls instead of wrapping into two lines */
 @media (max-width: 640px) {

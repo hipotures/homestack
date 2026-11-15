@@ -93,6 +93,7 @@ async fn main() -> ExitCode {
     let app = Router::new()
         .route("/", get(index))
         .route("/assets/{name}", get(asset))
+        .route("/assets/design-system/{name}", get(design_system_asset))
         .route("/api/dashboard/events", get(live::events))
         .route("/api/dashboard/snapshot", get(live::snapshot))
         .route("/api/dashboard/export", get(live::export))
@@ -232,10 +233,6 @@ fn asset_etag(plain: &'static [u8]) -> String {
 
 /// Versioned vendor assets are embedded in the Alpine binary, including gzip representations.
 async fn asset(Path(name): Path<String>, headers: HeaderMap) -> Response {
-    let gzip = headers
-        .get(header::ACCEPT_ENCODING)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.split(',').any(|s| s.trim() == "gzip" || s.trim() == "gzip;q=1"));
     let (plain, compressed): (&'static [u8], &'static [u8]) = match name.as_str() {
         "datastar-1.0.4.js" => (
             include_bytes!("../assets/datastar-1.0.4.js"),
@@ -254,11 +251,35 @@ async fn asset(Path(name): Path<String>, headers: HeaderMap) -> Response {
         "manifest.webmanifest" => (include_bytes!("../assets/manifest.webmanifest"), &[]),
         "aiusage-echarts-theme.js" => (include_bytes!("../assets/aiusage-echarts-theme.js"), &[]),
         "aiusage-tokens.css" => (include_bytes!("../assets/aiusage-tokens.css"), &[]),
+        "aiusage-ds.css" => (include_bytes!("../assets/aiusage-ds.css"), &[]),
         "datastar-LICENSE.md" => (include_bytes!("../assets/datastar-LICENSE.md"), &[]),
         "echarts-LICENSE.txt" => (include_bytes!("../assets/echarts-LICENSE.txt"), &[]),
         "echarts-NOTICE.txt" => (include_bytes!("../assets/echarts-NOTICE.txt"), &[]),
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
+    serve(&name, plain, compressed, &headers)
+}
+
+/// The shared design system (a pinned `git subtree`, see `assets/README.md`). `ds.css` is the
+/// entry point; the browser resolves its relative `@import`s to the other files of this route.
+async fn design_system_asset(Path(name): Path<String>, headers: HeaderMap) -> Response {
+    let plain: &'static [u8] = match name.as_str() {
+        "ds.css" => include_bytes!("../assets/design-system/ds.css"),
+        "tokens.css" => include_bytes!("../assets/design-system/tokens.css"),
+        "themes.css" => include_bytes!("../assets/design-system/themes.css"),
+        "components.css" => include_bytes!("../assets/design-system/components.css"),
+        "state.css" => include_bytes!("../assets/design-system/state.css"),
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    };
+    serve(&name, plain, &[], &headers)
+}
+
+/// An embedded asset with its ETag, content type and cache policy; `compressed` (gzip) marks an immutable vendor file.
+fn serve(name: &str, plain: &'static [u8], compressed: &'static [u8], headers: &HeaderMap) -> Response {
+    let gzip = headers
+        .get(header::ACCEPT_ENCODING)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.split(',').any(|s| s.trim() == "gzip" || s.trim() == "gzip;q=1"));
     let vendor = !compressed.is_empty();
     let etag = asset_etag(plain);
     let unchanged = headers

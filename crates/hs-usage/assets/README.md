@@ -15,6 +15,13 @@ bridge; it contains no PromQL, pricing or telemetry accounting.
 `aiusage-echarts-theme.js` builds the ECharts theme and series colors from
 those tokens, so colors are defined in one place.
 
+`design-system/` is the shared Intelitex design system v0.2.0 (plain CSS, CC0),
+a pinned `git subtree`. Never edit it here. `main.rs` embeds its five files
+and serves them at `/assets/design-system/`. `aiusage-ds.css` maps its colors
+to the AI Usage tokens and holds the AI Usage layout around its primitives.
+The pin, update procedure, migrated elements and workarounds are in
+[docs/ai-usage-design-system.md](../../../docs/ai-usage-design-system.md).
+
 Upstream references: [Datastar actions](https://data-star.dev/reference/actions),
 [SSE protocol](https://data-star.dev/reference/sse_events),
 [morph exclusions](https://data-star.dev/reference/attributes#data-ignore-morph),

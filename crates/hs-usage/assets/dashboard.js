@@ -101,7 +101,7 @@
     render(dirty);
   }
   function resync() {$("error").hidden=false;$("error").textContent="Synchronizing dataset versions…";$("resync").click();}
-  function freshness(f) {sourceAt=f.source_at;const d=new Date(f.source_at*1000);$("updated-text").textContent=`live · ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;$("updated").classList.remove("stale");}
+  function freshness(f) {sourceAt=f.source_at;const d=new Date(f.source_at*1000);$("updated-text").textContent=`live · ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;$("updated").classList.remove("stale");$("updated-dot").dataset.status="running";}
   function theme() {
     document.documentElement.dataset.theme=currentTheme;
     $("theme").textContent=currentTheme==="dark"?"☀ Light":"☾ Dark";
@@ -192,7 +192,8 @@
   const firstData=series=>Math.min(...series.flatMap(s=>s.points.filter(([,v])=>v>0).map(([t])=>t)));
   const sinceLabel=(t,range)=>{const d=new Date(t*1000),two=n=>String(n).padStart(2,"0");return range.end-range.start<=86400+range.step?`${two(d.getHours())}:${two(d.getMinutes())}`:`${two(d.getDate())}.${two(d.getMonth()+1)}`;};
   function renderTable(w) {
-    const table=el("table"),head=el("tr");head.append(el("th","","Bucket start (local)"),...w.spec.series.map(s=>el("th","",s.label||s.id)));table.append(head);
+    // Tables inside a design-system panel (the model views) use the package table; raw chart cards keep theirs.
+    const table=el("table",w.tableHost.closest(".ds-panel")?"ds-table":""),head=el("tr");head.append(el("th","","Bucket start (local)"),...w.spec.series.map(s=>el("th","",s.label||s.id)));table.append(head);
     const times=[...new Set(w.spec.series.flatMap(s=>s.points.map(p=>p[0])))].sort((a,b)=>b-a),maps=w.spec.series.map(s=>new Map(s.points));
     for(const t of times){const row=el("tr");row.append(el("td","",new Date(t*1000).toLocaleString()),...maps.map(m=>el("td","",format(m.get(t),w.spec.unit))));table.append(row);}
     w.tableHost.replaceChildren(table);
@@ -588,7 +589,7 @@
   function toolsCard(d,color) {
     const ranking=d.details.ranking||[],calls=ranking.reduce((s,r)=>s+r.calls,0),failed=ranking.reduce((s,r)=>s+r.failed,0),max=ranking[0]?.calls||0;
     const row=r=>`<div class="tool"><span title="${esc(r.tool)}">${esc(r.tool)}</span><div class="track" aria-hidden="true"><span style="width:${(r.calls-r.failed)/max*100}%;background:${color}"></span><span style="width:${r.failed?Math.max(1.2,r.failed/max*100):0}%;background:var(--warn)"></span></div><span class="num" title="${F.full(r.failed)} failed">${F.full(r.calls)}</span></div>`;
-    return `<div class="card"><div class="card-top"><div><h3>Tool calls</h3><span class="sub">${F.full(calls)} calls · ranking by tool</span></div>${calls?`<span class="badge"><b class="num">${F.full(failed)}</b> failed · ${F.pct(failed/calls*100,2)}</span>`:""}</div>
+    return `<div class="card"><div class="card-top"><div><h3>Tool calls</h3><span class="sub">${F.full(calls)} calls · ranking by tool</span></div>${calls?`<span class="ds-badge" data-tone="warning"><b class="num">${F.full(failed)}</b> failed · ${F.pct(failed/calls*100,2)}</span>`:""}</div>
       <div class="bars" style="gap:10px">${ranking.slice(0,10).map(row).join("")}</div>
       ${ranking.length>10?`<details class="more-tools"><summary class="note">${ranking.length-10} more ${ranking.length===11?"tool":"tools"}</summary><div class="bars" style="gap:10px">${ranking.slice(10).map(row).join("")}</div></details>`:""}${failed?`<div class="note faint">the yellow part of a bar is that tool's failed calls</div>`:""}</div>`;
   }
@@ -802,7 +803,7 @@
       if(goto)$("range-"+goto.dataset.goto).click();
     };
     $("raw-toggle").onclick=()=>{const show=$("raw").hidden;$("raw").hidden=!show;$("raw-toggle").setAttribute("aria-expanded",String(show));$("raw-toggle").textContent=`${show?"Hide":"Show"} raw charts (${widgets.size})`;if(show)$("raw").scrollIntoView({behavior:"smooth"});};
-    setInterval(()=>{if(lastPacket&&Date.now()-lastPacket>75000){$("updated").classList.add("stale");$("error").hidden=false;$("error").textContent="Live connection interrupted. Reconnecting…";}},15000);
+    setInterval(()=>{if(lastPacket&&Date.now()-lastPacket>75000){$("updated").classList.add("stale");$("updated-dot").dataset.status="waiting";$("error").hidden=false;$("error").textContent="Live connection interrupted. Reconnecting…";}},15000);
   });
   window.addEventListener("pagehide",()=>widgets.forEach(w=>w.chart?.dispose()));
 })();
