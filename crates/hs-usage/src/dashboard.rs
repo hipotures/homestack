@@ -1142,16 +1142,6 @@ fn normalize(
             r.labels.get("project").map(String::as_str),
         );
     }
-    // Inactive scopes can exist only in retained boundary baselines. Keep them
-    // discoverable without issuing another retention-wide label query.
-    for row in global
-        .main
-        .sources
-        .iter()
-        .flat_map(|source| source.data["result"].as_array().into_iter().flatten())
-    {
-        scope(row["metric"]["host_name"].as_str(), row["metric"]["project"].as_str());
-    }
     let mut sources = Vec::new();
     let mut seen = BTreeSet::new();
     for source in global

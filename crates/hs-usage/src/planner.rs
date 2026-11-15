@@ -11,7 +11,9 @@ use crate::{
 use futures_util::{FutureExt, StreamExt, future::BoxFuture, stream};
 use std::{collections::BTreeMap, sync::Arc};
 const RETENTION: &str = "600d";
-const GROUPS: &str = rules::GROUPS;
+/// Labels of the hourly and daily blocks, which feed only selection-filtered token totals.
+/// Model, effort, tool and outcome labels would multiply their series without being read.
+const COARSE: &str = "instrument,host_name,project,type,token_type";
 /// More unaggregated buckets than this are read as one raw range.
 const MAX_GAP_READS: usize = 8;
 #[derive(Clone, Debug)]
@@ -62,9 +64,6 @@ enum Part {
     Aggregated(u64),
     /// Instant vector of increments for the bucket starting at the stamp.
     Sum(u64),
-    /// Counter values to subtract the paired baseline from.
-    Current(usize, u64),
-    Baseline(usize),
 }
 type Job<'a> = (Part, BoxFuture<'a, Result<Arc<Source>, String>>);
 fn named(expression: &str) -> String {
@@ -78,7 +77,7 @@ fn selector(metrics: &[&Instrument]) -> String {
 }
 /// Delta gauge sums over `window`. `sum_over_time` drops `__name__`, so each
 /// instrument's name is restored as the `instrument` label.
-fn response_sums(metrics: &[&Instrument], window: &str) -> String {
+fn response_sums(metrics: &[&Instrument], window: &str, groups: &str) -> String {
     let parts: Vec<String> = metrics
         .iter()
         .map(|m| {
@@ -89,7 +88,7 @@ fn response_sums(metrics: &[&Instrument], window: &str) -> String {
             )
         })
         .collect();
-    format!("sum by ({GROUPS}) ({})", parts.join(" or "))
+    format!("sum by ({groups}) ({})", parts.join(" or "))
 }
 pub fn samples(source: &Source) -> Vec<(BTreeMap<String, String>, f64, f64)> {
     let mut out = Vec::new();
@@ -153,7 +152,7 @@ struct Plan<'a> {
     step: u64,
     history_end: f64,
     tokens_only: bool,
-    pairs: usize,
+    groups: &'static str,
     jobs: Vec<Job<'a>>,
 }
 impl<'a> Plan<'a> {
@@ -180,6 +179,7 @@ impl<'a> Plan<'a> {
     /// Raw closed buckets ending in (start, boundary] and the partial bucket up to `now`.
     fn raw(&mut self, start: u64, boundary: u64, now: u64) {
         let step = self.step;
+        let groups = self.groups;
         // Closed history is refreshed at most every six hours for late ingestion.
         for kind in [Kind::Counter, Kind::Response, Kind::History] {
             if kind == Kind::History && start as f64 >= self.history_end {
@@ -194,11 +194,11 @@ impl<'a> Plan<'a> {
                 let query = match kind {
                     // Histograms are read only by per-selection quantile queries.
                     Kind::Histogram => continue,
-                    Kind::Response => response_sums(&metrics, &format!("{step}s")),
+                    Kind::Response => response_sums(&metrics, &format!("{step}s"), groups),
                     Kind::Counter => {
                         let end = named(&format!("last_over_time({sel}[{step}s])"));
                         let before = named(&format!("last_over_time({sel}[{RETENTION}] offset {step}s)"));
-                        format!("sum by ({GROUPS}) (clamp_min({end} - ({before} or {end} * 0), 0))")
+                        format!("sum by ({groups}) (clamp_min({end} - ({before} or {end} * 0), 0))")
                     }
                     Kind::History => {
                         let history_end = self.history_end;
@@ -209,7 +209,7 @@ impl<'a> Plan<'a> {
                         );
                         let before = named(&format!("last_over_time({sel}[{RETENTION}] offset {step}s)"));
                         format!(
-                            "sum by ({GROUPS}) (clamp_min({end} - ({before} or {end} * 0), 0)) and on() (vector(time() - {step}) < {history_end})"
+                            "sum by ({groups}) (clamp_min({end} - ({before} or {end} * 0), 0)) and on() (vector(time() - {step}) < {history_end})"
                         )
                     }
                 };
@@ -233,22 +233,10 @@ impl<'a> Plan<'a> {
         match kind {
             Kind::Histogram => {}
             Kind::Response => {
-                let query = response_sums(&metrics, &format!("{}ms", milliseconds(from, to)));
+                let query = response_sums(&metrics, &format!("{}ms", milliseconds(from, to)), self.groups);
                 self.instant(Part::Sum(stamp), query, to, 30);
             }
             Kind::Counter | Kind::History => {
-                // Auxiliary projections reuse the main view's per-process counter endpoints.
-                let sel = if kind == Kind::Counter {
-                    selector(
-                        &self
-                            .registry
-                            .iter()
-                            .filter(|m| m.kind == Kind::Counter)
-                            .collect::<Vec<_>>(),
-                    )
-                } else {
-                    selector(&metrics)
-                };
                 if kind == Kind::History && from >= self.history_end {
                     return;
                 }
@@ -257,24 +245,21 @@ impl<'a> Plan<'a> {
                 } else {
                     to
                 };
-                let window = format!("{sel}[{}ms]", milliseconds(from, end));
-                let current = named(&format!("last_over_time({window})"));
+                let sel = selector(&metrics);
+                let current = named(&format!("last_over_time({sel}[{}ms])", milliseconds(from, end)));
+                // Baselines are subtracted per process before summing, which keeps counter
+                // resets and attribution while returning only the grouped increments.
+                let before = named(&format!("last_over_time({sel}[{RETENTION}] @ {from})"));
+                let query = format!(
+                    "sum by ({}) (clamp_min({current} - ({before} or {current} * 0), 0))",
+                    self.groups
+                );
                 let ttl = if kind == Kind::History && end < now as f64 {
                     21600
                 } else {
                     30
                 };
-                // Baselines are needed only for series active in the window; retained
-                // per-session history would otherwise grow without bound.
-                let query = format!(
-                    "{} and {}",
-                    named(&format!("last_over_time({sel}[{RETENTION}])")),
-                    named(&format!("last_over_time({window} @ {end})"))
-                );
-                let pair = self.pairs;
-                self.pairs += 1;
-                self.instant(Part::Current(pair, stamp), current, end, ttl);
-                self.instant(Part::Baseline(pair), query, from, ttl);
+                self.instant(Part::Sum(stamp), query, end, ttl);
             }
         }
     }
@@ -389,7 +374,7 @@ pub async fn block(
         step,
         history_end,
         tokens_only,
-        pairs: 0,
+        groups: if tokens_only { COARSE } else { rules::GROUPS },
         jobs: Vec::new(),
     };
     let mut sources = Vec::new();
@@ -431,7 +416,7 @@ pub async fn block(
                     plan.read(
                         Part::Aggregated(step),
                         range_params(
-                            format!("sum by ({GROUPS}) (sum_over_time({aggregated}[{step}s]))"),
+                            format!("sum by ({}) (sum_over_time({aggregated}[{step}s]))", plan.groups),
                             start + step,
                             aggregated_end,
                             step,
@@ -451,7 +436,8 @@ pub async fn block(
             match open {
                 Some((from, to)) if coverage.complete(from, to, open_count) => {
                     let query = format!(
-                        "sum by ({GROUPS}) (sum_over_time({aggregated}[{}ms]))",
+                        "sum by ({}) (sum_over_time({aggregated}[{}ms]))",
+                        plan.groups,
                         milliseconds(from, to)
                     );
                     plan.instant(Part::Sum(straddle), query, to, 30);
@@ -495,15 +481,6 @@ async fn finish(
         }
         fetched.push(source);
     }
-    // Baselines retain process identity until after subtraction; aggregating first loses resets/attribution.
-    let mut baselines: BTreeMap<(usize, String), f64> = BTreeMap::new();
-    for (part, source) in parts.iter().zip(&fetched) {
-        if let Part::Baseline(pair) = part {
-            for (labels, _, v) in samples(source) {
-                baselines.insert((*pair, serde_json::to_string(&labels).unwrap_or_default()), v);
-            }
-        }
-    }
     let mut records = Vec::new();
     for (part, source) in parts.iter().zip(&fetched) {
         for (labels, t, v) in samples(source) {
@@ -520,15 +497,6 @@ async fn finish(
                 Part::Aggregated(step) if gaps.contains(&(t as u64).saturating_sub(step)) => continue,
                 Part::Aggregated(step) => ((t as u64).saturating_sub(step), v),
                 Part::Sum(stamp) => (stamp, v),
-                Part::Current(pair, stamp) => (
-                    stamp,
-                    (v - baselines
-                        .get(&(pair, serde_json::to_string(&labels).unwrap_or_default()))
-                        .copied()
-                        .unwrap_or(0.))
-                    .max(0.),
-                ),
-                Part::Baseline(_) => continue,
             };
             records.push(record(labels, time, value));
         }
