@@ -79,6 +79,12 @@ This future system is not yet specified. Do not build it, redesign E2E, create p
 - Run migration experiments only on a snapshot in a temporary directory, never the original database.
 - Verify migrated snapshots with `PRAGMA integrity_check` before trusting results.
 
+# Releases and feature branches
+
+- The automatic release steps in the sections below apply to work committed on `main`. Release tags publish production images and packages, so they are created only from `main`.
+- On a feature branch, build, verify, commit and push as usual, but create no release tag and publish no image or package. Record in the final report which release the branch will need.
+- After the owner merges the feature branch into `main`, run the release script for each affected release line from the pushed `main` HEAD, following the rules of its section.
+
 # API image releases
 
 - Agents must decide whether each completed change needs a new API image and perform the release automatically when required, without waiting for the user to request a tag.
