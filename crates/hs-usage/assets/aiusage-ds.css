@@ -27,10 +27,9 @@
   --amber-soft: color-mix(in srgb, var(--warn) 12%, transparent);
 }
 
-/* Header: the range control scrolls sideways on phones instead of wrapping. */
+/* Header: the range control scrolls sideways on phones instead of wrapping (the scrollbar stays visible). */
 @media (max-width: 640px) {
-  .range > .ds-segmented { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
-  .range > .ds-segmented::-webkit-scrollbar { display: none; }
+  .range > .ds-segmented { max-width: 100%; overflow-x: auto; }
 }
 .ds-segmented button { white-space: nowrap; }
 
@@ -47,7 +46,7 @@
 .ds-panel .sub { font-size: var(--fs-small); color: var(--muted); }
 .ds-panel-body { display: flex; flex-direction: column; gap: 16px; }
 
-/* Data tables: dense rows with the numbers right-aligned, a sticky header and columns sized to their content. */
+/* Data tables (the scrolling wrapper is a focusable, labelled region for keyboard scrolling): dense rows with the numbers right-aligned, a sticky header and columns sized to their content. */
 .table-wrap .ds-table { table-layout: auto; font-variant-numeric: tabular-nums; }
 .table-wrap .ds-table td { white-space: nowrap; }
 .table-wrap .ds-table :is(th, td):not(:first-child) { text-align: right; }

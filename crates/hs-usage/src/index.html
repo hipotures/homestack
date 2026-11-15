@@ -219,7 +219,7 @@ button:not(.ds-btn, .ds-icon-btn, .ds-segmented button):focus-visible, select:no
 <div class="ds-panel-body">
 <div class="chips" id="model-tokens-chips"></div>
 <div class="chart" id="model-tokens-chart" role="img" aria-label="Token categories of the selected model, stacked per bucket"></div>
-<div class="table-wrap" hidden></div>
+<div class="table-wrap" hidden tabindex="0" role="region" aria-label="Model tokens data"></div>
 </div>
 </section>
 <section class="ds-panel" id="model-hit" aria-label="Cache hit by model over time" hidden>
@@ -228,7 +228,7 @@ button:not(.ds-btn, .ds-icon-btn, .ds-segmented button):focus-visible, select:no
 <div class="ds-panel-body">
 <div class="chips" id="model-hit-chips"></div>
 <div class="chart" id="model-hit-chart" role="img" aria-label="Cache hit rate per model and bucket"></div>
-<div class="table-wrap" hidden></div>
+<div class="table-wrap" hidden tabindex="0" role="region" aria-label="Cache hit data"></div>
 </div>
 </section>
 </div>
@@ -238,7 +238,7 @@ button:not(.ds-btn, .ds-icon-btn, .ds-segmented button):focus-visible, select:no
 <div class="ds-panel-body">
 <div class="chips" id="model-effort-chips"></div>
 <div class="chart" id="model-effort-chart" role="img" aria-label="Tokens per reasoning effort level, stacked per bucket"></div>
-<div class="table-wrap" hidden></div>
+<div class="table-wrap" hidden tabindex="0" role="region" aria-label="Tokens by effort data"></div>
 </div>
 </section>
 <div class="row-3">

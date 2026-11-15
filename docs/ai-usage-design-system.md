@@ -64,7 +64,7 @@ The package's accent hooks (`--ds-accent-dark`, `--ds-accent-light`) are not use
 
 **App-specific layout.** The adapter also holds the layout rules the package does not provide:
 
-- the range control scrolls sideways on phones;
+- the range control scrolls sideways on phones, with a visible scrollbar;
 - the status dot sits in a flex row without its own margin;
 - the error notice is a single line after a "⚠" sign;
 - the model panels have a heading block and wrapping tools;
@@ -84,7 +84,7 @@ The package's accent hooks (`--ds-accent-dark`, `--ds-accent-light`) are not use
 | Model picker | `.ds-select` |
 | Table / chart toggle | `.ds-btn .ds-btn-ghost .ds-btn-compact` |
 | Copy data as JSON | `.ds-icon-btn` |
-| Model panel data table | `.ds-table` (set by `renderTable` for tables inside a `.ds-panel`) |
+| Model panel data table | `.ds-table` (set by `renderTable` for tables inside a `.ds-panel`); its scrolling wrapper is a focusable, labelled `role="region"`, so arrow keys scroll it |
 | Codex "failed" tool calls | `.ds-badge` with `data-tone="warning"` |
 | Live status dot | `.ds-status-dot`: `data-status="running"`, or `"waiting"` when the live connection is stale |
 | Error banner | `.ds-notice` with `data-tone="danger"`, `role="status"` |
@@ -182,6 +182,7 @@ compiled binary:
   - **Model panel:**
     - The toggle shows a `.ds-table` with a sticky header inside the panel.
     - Copy puts JSON on the clipboard.
+    - The table wrapper takes keyboard focus and scrolls with the arrow keys.
     - The raw chart tables keep their own style.
   - **Status:**
     - the Codex failed-calls badge has the warning tone and color;
