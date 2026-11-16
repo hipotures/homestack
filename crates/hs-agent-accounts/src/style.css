@@ -57,8 +57,12 @@ select option { background: var(--surface-3); }
 label { display: grid; gap: 6px; font-size: var(--fs-small); color: var(--muted); }
 .actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; padding-top: 4px; }
 .controls { display: flex; gap: 10px; align-items: center; }
-label.toggle { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; cursor: pointer; margin-right: 4px; }
-label.toggle input { margin: 0; accent-color: var(--codex); cursor: pointer; }
+label.toggle { display: inline-flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 13px; border: 1px solid var(--border-strong); border-radius: var(--radius-ctl); font-size: 13px; color: var(--text); white-space: nowrap; cursor: pointer; }
+label.toggle:hover { background: var(--surface-2); }
+label.toggle input { appearance: none; width: 13px; min-height: 0; height: 13px; margin: 0; padding: 0; border: 1px solid var(--muted); border-radius: 3px; display: grid; place-content: center; cursor: pointer; }
+label.toggle input:checked { border-color: var(--text); }
+label.toggle input:checked::after { content: ''; width: 7px; height: 7px; border-radius: 1px; background: var(--text); }
+label.toggle:has(input:focus-visible) { outline: 2px solid var(--codex); outline-offset: 2px; }
 .seg { display: inline-flex; flex-wrap: nowrap; white-space: nowrap; gap: 2px; padding: 3px; border: 1px solid var(--border-strong); border-radius: var(--radius-ctl); }
 .seg button { border: 0; min-height: 30px; padding: 0 11px; border-radius: var(--radius-pill); color: var(--text-2); }
 .seg button:hover:not(:disabled) { color: var(--text); background: var(--surface-3); }
