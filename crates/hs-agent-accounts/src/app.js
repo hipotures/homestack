@@ -209,9 +209,11 @@ async function details(profile) {
   $('#details').showModal();
 }
 async function refresh() {
-  const profiles = await api('/profiles');
+  const all = await api('/profiles');
+  const profiles = hideFree ? all.filter(p => p.account?.plan?.toLowerCase() !== 'free') : all;
   $('#profiles').replaceChildren();
-  if (!profiles.length) $('#profiles').append(node('p', 'No profiles yet. Add an account to begin.'));
+  if (!all.length) $('#profiles').append(node('p', 'No profiles yet. Add an account to begin.'));
+  else if (!profiles.length) $('#profiles').append(node('p', 'All accounts are on the free plan and hidden.'));
   for (const profile of profiles) {
     const card = node('article', undefined, `card provider-${profile.provider}`);
     const identity = node('div', undefined, 'identity');
@@ -227,7 +229,7 @@ async function refresh() {
     const manual = profile.provider === 'claude';
     const start = manual ? profile.last_payment : profile.account?.period_start;
     const end = manual ? start && addMonths(start, 1) : profile.account?.period_end;
-    if (end || manual) {
+    if (manual || end > Date.now() / 1000 - 86400) {
       const left = header.appendChild(node('span', end ? periodLeft(end) : 'Set last payment', 'sub period'));
       left.title = end ? `Period start: ${time(start)}\nPeriod end: ${time(end)}` : 'Enter the time of the latest receipt';
       if (manual) {
@@ -434,6 +436,14 @@ $('#theme').onclick = () => {
   theme();
 };
 theme();
+let hideFree = true;
+try { hideFree = localStorage.getItem('hideFree') !== 'false'; } catch {}
+$('#hide-free').checked = hideFree;
+$('#hide-free').onchange = () => {
+  hideFree = $('#hide-free').checked;
+  try { localStorage.setItem('hideFree', hideFree); } catch {}
+  refresh().catch(notice);
+};
 const pageVersion = document.querySelector('meta[name="agent-accounts-version"]').content;
 let providersLoaded = false, disconnected = false, polling = false, pollTimer = null, retryDelay = 2000;
 const telegramLabels = {
