@@ -225,7 +225,7 @@
       const data=[...cells].map(([key,v])=>{const [day,hour]=key.split(',').map(Number);return [hour,day,v];});
       option={tooltip:{position:"top"},grid:{left:12,right:16,top:16,bottom:74,containLabel:true},xAxis:{type:"category",axisLabel:{interval:"auto",hideOverlap:true,margin:10},axisTick:{alignWithLabel:true},data:Array.from({length:24},(_,h)=>String(h).padStart(2,"0"))},yAxis:{type:"category",axisLabel:{interval:0,margin:8},data:["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]},visualMap:{min:0,max:Math.max(1,...data.map(v=>v[2])),calculable:true,orient:"horizontal",left:"center",bottom:20,itemWidth:12,itemHeight:120,padding:8,formatter:value=>AIUsage.fmt.tokens(value)},series:[{id:"heat",type:"heatmap",data,emphasis:{itemStyle:{borderWidth:1}}}]};
     } else {
-      option={grid:{left:65,right:18,top:55,bottom:55},legend:{type:"scroll",left:"center",right:"auto",top:"auto",bottom:0},tooltip:{trigger:"axis",axisPointer:{type:"shadow"},valueFormatter:v=>format(v,spec.unit)},xAxis:{type:"time",min:timeRange?((since??timeRange.start)-timeRange.step/2)*1000:undefined,max:timeRange?timeRange.end*1000:undefined,axisLabel:{hideOverlap:true},axisPointer:{label:{formatter:p=>new Date(p.value).toLocaleString()}}},yAxis:{type:"value",max:spec.max,minInterval:["count","tokens"].includes(spec.unit)?1:undefined,axisLabel:{formatter:v=>spec.unit==="ratio"?`${Math.round(v*100)}%`:spec.unit==="USD"?AIUsage.fmt.cost(v):spec.unit==="seconds"?AIUsage.fmt.duration(v):AIUsage.fmt.tokens(v)}},dataZoom:[{type:"inside"}],series:spec.series.map(s=>({id:`${s.dataset}:${s.id}`,name:s.label||s.id,type:spec.unit==="ratio"?"line":"bar",stack:spec.stack?"total":undefined,itemStyle:{color:seriesColor(s)},lineStyle:{color:seriesColor(s)},data:s.points.map(([t,v])=>[t*1000,v]),connectNulls:false}))};
+      option={grid:{left:65,right:18,top:55,bottom:55},legend:{type:"scroll",left:"center",right:"auto",top:"auto",bottom:0},tooltip:{trigger:"axis",axisPointer:{type:"shadow"},valueFormatter:v=>format(v,spec.unit)},xAxis:{type:"time",min:timeRange?((since??timeRange.start)-timeRange.step/2)*1000:undefined,max:timeRange?timeRange.end*1000:undefined,axisLabel:{hideOverlap:true},axisPointer:{label:{formatter:p=>F.when(p.value)}}},yAxis:{type:"value",max:spec.max,minInterval:["count","tokens"].includes(spec.unit)?1:undefined,axisLabel:{formatter:v=>spec.unit==="ratio"?`${Math.round(v*100)}%`:spec.unit==="USD"?AIUsage.fmt.cost(v):spec.unit==="seconds"?AIUsage.fmt.duration(v):AIUsage.fmt.tokens(v)}},dataZoom:[{type:"inside"}],series:spec.series.map(s=>({id:`${s.dataset}:${s.id}`,name:s.label||s.id,type:spec.unit==="ratio"?"line":"bar",stack:spec.stack?"total":undefined,itemStyle:{color:seriesColor(s)},lineStyle:{color:seriesColor(s)},data:s.points.map(([t,v])=>[t*1000,v]),connectNulls:false}))};
     }
     Object.assign(option,{animationDurationUpdate:180,aria:{enabled:true}});
     w.chart.setOption(option,{replaceMerge:["series"],lazyUpdate:true});w.updates++;
@@ -246,10 +246,7 @@
     const table=el("table","tm-table"),thead=el("thead"),tbody=el("tbody"),head=el("tr"),bucket=name("Bucket start (local)","aiu-col-name");
     head.append(bucket,...w.spec.series.map(s=>name(s.label||s.id)));thead.append(head);table.append(thead,tbody);
     const times=[...new Set(w.spec.series.flatMap(s=>s.points.map(p=>p[0])))].sort((a,b)=>b-a),maps=w.spec.series.map(s=>new Map(s.points));
-    // Compact local time like the rest of the dashboard; the year only when the rows span more than one.
-    const years=new Set(times.map(t=>new Date(t*1000).getFullYear())).size>1;
-    const when=t=>{const d=new Date(t*1000);return `${two(d.getDate())}.${two(d.getMonth()+1)}${years?"."+d.getFullYear():""} ${two(d.getHours())}:${two(d.getMinutes())}`;};
-    for(const t of times){const row=el("tr");row.append(el("td","aiu-col-time",when(t)),...maps.map(m=>el("td","tm-num",format(m.get(t),w.spec.unit))));tbody.append(row);}
+    for(const t of times){const row=el("tr");row.append(el("td","aiu-col-time",AIUsage.fmt.when(t*1000)),...maps.map(m=>el("td","tm-num",format(m.get(t),w.spec.unit))));tbody.append(row);}
     w.tableHost.replaceChildren(table);
   }
   // ---- Overview (main view). Values are backend totals; the browser only lays them out. ----
@@ -371,7 +368,7 @@
     const latest=series.points.at(-1);
     shareChart.setOption({
       grid:{left:8,right:62,top:24,bottom:8,containLabel:true},
-      tooltip:{trigger:"axis",formatter:params=>{const p=params.find(p=>p.seriesId==="share-line"),v=p?.value?.[1];return v==null?AIUsage.tipRow("No usage in this bucket","",{muted:true}):AIUsage.tipTitle(new Date(p.value[0]).toLocaleString())+AIUsage.tipRow("Claude Code",F.pct(v*100),{color:orange})+AIUsage.tipRow("Codex",F.pct((1-v)*100),{color:blue});}},
+      tooltip:{trigger:"axis",formatter:params=>{const p=params.find(p=>p.seriesId==="share-line"),v=p?.value?.[1];return v==null?AIUsage.tipRow("No usage in this bucket","",{muted:true}):AIUsage.tipTitle(F.when(p.value[0]))+AIUsage.tipRow("Claude Code",F.pct(v*100),{color:orange})+AIUsage.tipRow("Codex",F.pct((1-v)*100),{color:blue});}},
       xAxis:{type:"time",min:first*1000,max:range.end*1000,axisLabel:{hideOverlap:true}},
       yAxis:{type:"value",min:0,max:1,interval:.25,axisLabel:{showMinLabel:true,showMaxLabel:true,formatter:v=>`${Math.round(v*100)}%`}},
       series:[{id:"share-fill",type:"custom",coordinateSystem:"cartesian2d",silent:true,tooltip:{show:false},data:areas,
@@ -425,7 +422,7 @@
         for(const {reset,minutes,live}of periods.values()){
           const until=live?reset:Math.min(reset,range.end),start=Math.max(range.start,reset-minutes*60);
           if(until<=start)continue;
-          areas.push([{name:`${who} · ${minutes===10080?"7-day":minutes/60+"-hour"} reset ${new Date(reset*1000).toLocaleString()}`,xAxis:start*1000,itemStyle:{color:AIUsage.colorFor(agents[w.agent]),opacity:.04}},{xAxis:until*1000}]);
+          areas.push([{name:`${who} · ${minutes===10080?"7-day":minutes/60+"-hour"} reset ${F.when(reset*1000)}`,xAxis:start*1000,itemStyle:{color:AIUsage.colorFor(agents[w.agent]),opacity:.04}},{xAxis:until*1000}]);
         }
       }
     }
@@ -433,7 +430,7 @@
   }
   // Shift+drag on the trend marks whole buckets and totals the drawn values; Esc, a plain click or ✕ clears it.
   let brush=null,trendView=null;
-  const stamp=t=>{const d=new Date(t*1000);return `${two(d.getDate())}.${two(d.getMonth()+1)} ${two(d.getHours())}:${two(d.getMinutes())}`;};
+  const stamp=t=>F.when(t*1000);
   function brushParts(){
     const v=trendView;
     if(!brush||!v)return null;
@@ -498,7 +495,7 @@
     $("trend-chips").innerHTML=trendView.chips+brushChips(selected);
     const peak=[...stack].filter(([t])=>t>=first).reduce((m,p)=>p[1]>m[1]?p:m,[0,0]);
     const usageTooltip=AIUsage.tooltipFormatter(fmtFull);
-    const eventTooltip=events=>events.map(e=>AIUsage.tipRow(e.name,"",{color:e.lineStyle.color})+AIUsage.tipRow(new Date(e.xAxis).toLocaleString(),"",{muted:true})).join("");
+    const eventTooltip=events=>events.map(e=>AIUsage.tipRow(e.name,"",{color:e.lineStyle.color})+AIUsage.tipRow(F.when(e.xAxis),"",{muted:true})).join("");
     // Include every quota observation in the hovered usage bucket, even off the line itself.
     const eventsByBucket=new Map();
     for(const event of overlay.events){
@@ -595,7 +592,7 @@
     $("hours-legend").innerHTML=rows.map(({agent,series})=>legendItem(agentColor(agent),`${agents[agent]} <span class="tm-mono">${series?`≈ ${hours(total(series.points))}`:"not reported"}</span>`)).join("");
     if(!available){$("hours-sub").textContent="estimated active hours · selected range";return;}
     const range=d.range;
-    $("hours-sub").textContent=`estimated active hours · ${bucketLabel(range.step)} · through ${new Date(range.end*1000).toLocaleString()}`;
+    $("hours-sub").textContent=`estimated active hours · ${bucketLabel(range.step)} · through ${F.when(range.end*1000)}`;
     hoursChart=hoursChart||AIUsage.init($("hours-chart"));
     hoursChart.setOption({
       grid:{left:8,right:8,top:16,bottom:12,containLabel:true},
@@ -719,7 +716,7 @@
   const modelViews={tokens:{id:"model-tokens",table:false,spec:null,chart:null},hit:{id:"model-hit",table:false,spec:null,chart:null},effort:{id:"model-effort",table:false,spec:null,chart:null}};
   const PARTS=TYPES.filter(([id])=>id!=="reasoning");
   const pointsOf=(d,model,category)=>d.series.find(s=>s.dimensions.model===model&&s.dimensions.category===category)?.points||[];
-  const viewTip=(t,rows)=>AIUsage.tipTitle(new Date(t*1000).toLocaleString())+rows.join("");
+  const viewTip=(t,rows)=>AIUsage.tipTitle(F.when(t*1000))+rows.join("");
   const tipRow=(left,right,muted,color)=>AIUsage.tipRow(left,right,{muted,color,html:true});
   /** Bucket runs without any reported sample, drawn as shaded "no data" areas. */
   function missingAreas(times,seen,range){

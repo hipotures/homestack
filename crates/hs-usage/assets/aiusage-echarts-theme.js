@@ -67,6 +67,8 @@
     },
     pct(n, d = 1) { return n == null ? '—' : n.toFixed(d) + '%'; },
     full(n) { return n == null ? '—' : n.toLocaleString('pl-PL'); },
+    /** Local date and time as ISO 8601 (YYYY-MM-DD HH:MM, 24-hour); takes milliseconds. */
+    when(ms) { const d = new Date(ms), p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; },
     /** seconds → "850 ms", "5.3 s", "14 min", "6 h 45 min" */
     duration(s) {
       if (s == null) return '—';
@@ -210,7 +212,7 @@
       const rows = params
         .filter((p) => (Array.isArray(p.value) ? p.value[1] : p.value) > 0)
         .map((p) => tipRow(p.seriesName, valueFmt(Array.isArray(p.value) ? p.value[1] : p.value), { color: p.color }));
-      return tipTitle(params[0]?.axisValueLabel ?? '') + (rows.join('') || tipRow('no data', '', { muted: true }));
+      return tipTitle(typeof params[0]?.axisValue === 'number' ? fmt.when(params[0].axisValue) : params[0]?.axisValueLabel ?? '') + (rows.join('') || tipRow('no data', '', { muted: true }));
     };
   }
 
