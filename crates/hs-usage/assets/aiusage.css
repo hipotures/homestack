@@ -231,3 +231,7 @@ body { overflow-x: hidden; font-variant-numeric: tabular-nums; }
 .aiu-agent-head .tm-tabs { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
 /* KPI share bar: a full-width first line of the tile caption. */
 .aiu-kpi__detail > .aiu-track { flex: 1 0 100%; margin: var(--tm-space-1) 0 2px; }
+/* Cache-hit tile: the scale lives in the bars' tooltip; the minimum sits right on the caption line. */
+.aiu-hits-tip { display: block; }
+.aiu-hits-tip > .aiu-hits { display: flex; }
+.aiu-push { margin-left: auto; white-space: nowrap; }
