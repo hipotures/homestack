@@ -120,13 +120,26 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             }),
         )
         .route(
-            "/tokens.css",
+            "/vendor/the-mechanics/the-mechanics.css",
             get(|| async {
                 (
                     [(header::CONTENT_TYPE, "text/css")],
-                    include_str!("../../hs-usage/assets/aiusage-tokens.css"),
+                    include_str!("../assets/the-mechanics/the-mechanics.css"),
                 )
             }),
+        )
+        .route(
+            "/vendor/the-mechanics/fonts.css",
+            get(|| async { ([(header::CONTENT_TYPE, "text/css")], include_str!("../assets/the-mechanics/fonts.css")) }),
+        )
+        .route("/vendor/the-mechanics/fonts/{name}", get(font))
+        .route(
+            "/theme.js",
+            get(|| async { ([(header::CONTENT_TYPE, "text/javascript")], include_str!("theme.js")) }),
+        )
+        .route(
+            "/tm-select.js",
+            get(|| async { ([(header::CONTENT_TYPE, "text/javascript")], include_str!("tm-select.js")) }),
         )
         .route(
             "/app.js",
@@ -252,6 +265,36 @@ async fn providers(State(c): State<Arc<Context>>) -> Json<Value> {
 async fn profiles(State(c): State<Arc<Context>>) -> Result<Json<Vec<Profile>>> {
     Ok(Json(c.profiles()?))
 }
+async fn font(Path(name): Path<String>) -> Response {
+    macro_rules! fonts {
+        ($($file:literal),* $(,)?) => {
+            match name.as_str() {
+                $($file => include_bytes!(concat!("../assets/the-mechanics/fonts/", $file)).as_slice(),)*
+                _ => return StatusCode::NOT_FOUND.into_response(),
+            }
+        };
+    }
+    let body = fonts![
+        "ibm-plex-mono-latin-400-normal.woff2",
+        "ibm-plex-mono-latin-500-normal.woff2",
+        "ibm-plex-mono-latin-600-normal.woff2",
+        "ibm-plex-mono-latin-700-normal.woff2",
+        "ibm-plex-mono-latin-ext-400-normal.woff2",
+        "ibm-plex-mono-latin-ext-500-normal.woff2",
+        "ibm-plex-mono-latin-ext-600-normal.woff2",
+        "ibm-plex-mono-latin-ext-700-normal.woff2",
+        "ibm-plex-sans-latin-400-normal.woff2",
+        "ibm-plex-sans-latin-500-normal.woff2",
+        "ibm-plex-sans-latin-600-normal.woff2",
+        "ibm-plex-sans-latin-700-normal.woff2",
+        "ibm-plex-sans-latin-ext-400-normal.woff2",
+        "ibm-plex-sans-latin-ext-500-normal.woff2",
+        "ibm-plex-sans-latin-ext-600-normal.woff2",
+        "ibm-plex-sans-latin-ext-700-normal.woff2",
+    ];
+    ([(header::CONTENT_TYPE, "font/woff2")], body).into_response()
+}
+
 async fn profile(State(c): State<Arc<Context>>, Path(id): Path<String>) -> Result<Json<Profile>> {
     let mut p = c.db.profile(&id)?;
     p.stale = c.stale(&p);

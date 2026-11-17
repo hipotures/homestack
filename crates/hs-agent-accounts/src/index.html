@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-tm-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="agent-accounts-version" content="__AGENT_ACCOUNTS_VERSION__">
@@ -9,64 +9,122 @@
 <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
 <link rel="apple-touch-icon" href="/favicon-180.png">
 <link rel="manifest" href="/manifest.webmanifest">
-<link rel="stylesheet" href="/tokens.css?v=__AGENT_ACCOUNTS_VERSION__">
+<script src="/theme.js?v=__AGENT_ACCOUNTS_VERSION__"></script>
+<link rel="stylesheet" href="/vendor/the-mechanics/fonts.css?v=__AGENT_ACCOUNTS_VERSION__">
+<link rel="stylesheet" href="/vendor/the-mechanics/the-mechanics.css?v=__AGENT_ACCOUNTS_VERSION__">
 <link rel="stylesheet" href="/style.css?v=__AGENT_ACCOUNTS_VERSION__">
+<script src="/tm-select.js?v=__AGENT_ACCOUNTS_VERSION__" defer></script>
 <script src="/app.js?v=__AGENT_ACCOUNTS_VERSION__" defer></script>
 </head>
-<body>
-<main>
-<header class="top">
-  <div class="brand"><h1>Agent Accounts</h1><span id="telegram-status" class="telegram-status" role="img" hidden><svg viewBox="0 0 1000 1000" width="24" height="24" aria-hidden="true"><circle cx="500" cy="500" r="500" fill="currentColor"/><path fill="#fff" d="M226.328419,494.722069 C372.088573,431.216685 469.284839,389.350049 517.917216,369.122161 C656.772535,311.36743 685.625481,301.334815 704.431427,301.003532 C708.567621,300.93067 717.815839,301.955743 723.806446,306.816707 C728.864797,310.92121 730.256552,316.46581 730.922551,320.357329 C731.588551,324.248848 732.417879,333.113828 731.758626,340.040666 C724.234007,419.102486 691.675104,610.964674 675.110982,699.515267 C668.10208,736.984342 654.301336,749.547532 640.940618,750.777006 C611.904684,753.448938 589.856115,731.588035 561.733393,713.153237 C517.726886,684.306416 492.866009,666.349181 450.150074,638.200013 C400.78442,605.66878 432.786119,587.789048 460.919462,558.568563 C468.282091,550.921423 596.21508,434.556479 598.691227,424.000355 C599.00091,422.680135 599.288312,417.758981 596.36474,415.160431 C593.441168,412.561881 589.126229,413.450484 586.012448,414.157198 C581.598758,415.158943 511.297793,461.625274 375.109553,553.556189 C355.154858,567.258623 337.080515,573.934908 320.886524,573.585046 C303.033948,573.199351 268.692754,563.490928 243.163606,555.192408 C211.851067,545.013936 186.964484,539.632504 189.131547,522.346309 C190.260287,513.342589 202.659244,504.134509 226.328419,494.722069 Z"/></svg></span></div>
-  <div class="controls"><label class="toggle"><input id="hide-free" type="checkbox" checked>Hide free</label><button id="theme" type="button">Theme</button><button id="add" class="primary" type="button">Add account</button></div>
-</header>
-<p id="notice" class="error" role="status"></p>
-<section id="profiles" class="grid"></section>
-<section class="card">
-  <div class="card-head"><h2>Provider runtimes</h2><span class="sub">Pinned CLI versions shared by all profiles</span></div>
-  <div id="runtimes" class="runtimes"></div>
-</section>
-<footer class="foot"><span id="versions">Agent Accounts __AGENT_ACCOUNTS_VERSION__</span></footer>
-</main>
-<dialog id="add-dialog"><form id="create">
-  <h2>Add account</h2>
-  <label>Provider<select name="provider" id="providers"></select></label>
-  <label>Display name<input name="display_name" required maxlength="80"></label>
-  <footer><button type="button" data-close>Cancel</button><button class="primary">Create profile</button></footer>
-</form></dialog>
-<dialog id="operation">
-  <h2>Authentication</h2>
-  <p id="progress"></p>
-  <pre id="operation-result"></pre>
-  <a id="auth-url" target="_blank" rel="noopener noreferrer" hidden>Open authorization page</a>
-  <div class="code-row"><p id="device-code"></p><button type="button" id="copy-code" hidden>Copy code</button></div>
-  <form id="code-form" hidden><label>Authorization code<input id="auth-code" autocomplete="off" maxlength="4096"></label><button class="primary">Submit code</button></form>
-  <footer><button id="cancel-operation" type="button">Cancel operation</button><button type="button" data-close>Close</button></footer>
-</dialog>
-<dialog id="window-dialog"><form id="window-form">
-  <h2 id="window-title">Usage window</h2>
-  <p id="window-status" class="sub"></p>
-  <h3>Start now</h3>
-  <p class="sub">Sends one minimal request with no tools or project context, so the provider starts counting this window now. It would reset at <strong id="window-reset" class="num"></strong>.</p>
-  <div><button type="button" id="window-start">Start now</button></div>
-  <h3>Daily auto-start</h3>
-  <p class="sub">From this time until the tolerance ends, starts the window as soon as it is not running. At most once a day.</p>
-  <div class="window-row">
-    <label>Time<input id="auto-time" placeholder="HH:MM" autocomplete="off" class="num"></label>
-    <label>Tolerance (minutes)<input id="auto-tolerance" type="number" required min="1" max="720" step="1" class="num"></label>
+<body class="tm-root">
+<main class="aa-main">
+<header class="tm-page-head aa-head">
+  <div class="aa-brand">
+    <h1 class="tm-page-title">Agent Accounts</h1>
+    <span class="tm-tip tm-tip--below aa-tipwrap aa-tipwrap--start"><span id="telegram-status" class="aa-telegram" role="img" tabindex="0" hidden><svg class="tm-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M14.5 1.5 1.5 7l5 2 2 5.5zM6.5 9l8-7.5"/></svg></span><span class="tm-tip__bubble aa-info__bubble" id="telegram-tip" aria-hidden="true"></span></span>
   </div>
-  <p id="auto-zone" class="meta"></p>
-  <footer><button type="button" data-close>Cancel</button><button type="button" id="auto-clear">Clear</button><button class="primary">Save</button></footer>
+  <div class="aa-controls">
+    <span class="tm-tip tm-tip--below aa-theme"><button id="theme" class="tm-btn tm-btn--ghost tm-btn--icon" type="button"><svg class="tm-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path id="theme-icon" d=""/></svg></button><span class="tm-tip__bubble" id="theme-tip" aria-hidden="true"></span></span>
+    <span class="tm-tip tm-tip--below aa-add"><button id="add" class="tm-btn tm-btn--ghost tm-btn--icon" type="button" aria-label="Add account"><svg class="tm-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6.5 7.5a2.75 2.75 0 1 0 0-5.5 2.75 2.75 0 0 0 0 5.5zM1.5 14a5 5 0 0 1 10 0M13 4.5v5M10.5 7h5"/></svg></button><span class="tm-tip__bubble" aria-hidden="true">Add account</span></span>
+  </div>
+</header>
+</div>
+<section class="aa-section" aria-labelledby="accounts-title">
+  <div class="tm-section-head">
+    <h2 class="tm-section-head__title" id="accounts-title">Accounts</h2>
+    <span class="tm-section-head__meta" id="accounts-meta"></span>
+    <label class="tm-choice aa-filter"><input id="hide-free" class="tm-check" type="checkbox" checked><span>Hide free</span></label>
+  </div>
+  <div id="profiles" class="aa-cards"></div>
+</section>
+<section class="aa-section" aria-labelledby="runtimes-title">
+  <div class="tm-section-head">
+    <h2 class="tm-section-head__title" id="runtimes-title">Provider runtimes</h2>
+    <span class="tm-section-head__meta">Pinned CLI versions shared by all profiles</span>
+  </div>
+  <div id="runtimes" class="aa-cards"></div>
+</section>
+<footer class="aa-foot tm-meta"><span id="versions">Agent Accounts __AGENT_ACCOUNTS_VERSION__</span></footer>
+</main>
+
+<dialog id="add-dialog" class="tm-dialog" aria-labelledby="add-title"><form id="create">
+  <div class="tm-dialog__head"><h2 class="tm-dialog__title" id="add-title">Add account</h2>
+    <button type="button" class="tm-btn tm-btn--ghost tm-btn--icon tm-btn--sm" data-close aria-label="Close"><svg class="tm-icon tm-icon--sm" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" stroke="currentColor" stroke-width="1.6"/></svg></button></div>
+  <div class="tm-dialog__body aa-stack">
+    <div class="tm-field"><label class="tm-field__label" for="providers">Provider</label><select class="tm-select" name="provider" id="providers"></select></div>
+    <div class="tm-field"><label class="tm-field__label" for="display-name">Display name</label><input class="tm-input" id="display-name" name="display_name" required maxlength="80" data-clearable></div>
+  </div>
+  <div class="tm-dialog__foot"><button type="button" class="tm-btn tm-btn--outline" data-close>Cancel</button><button class="tm-btn tm-btn--primary">Create profile</button></div>
 </form></dialog>
-<dialog id="payment-dialog"><form id="payment-form">
-  <h2>Last payment</h2>
-  <p class="sub">Date and time of the latest receipt. The billing period ends one month later.</p>
-  <label>Paid at<span class="payment-row"><input id="payment-at" required placeholder="DD.MM.YYYY HH:MM" autocomplete="off" class="num"><button type="button" id="payment-next">+1 month</button></span></label>
-  <footer><button type="button" data-close>Cancel</button><button type="button" id="payment-clear">Clear</button><button class="primary">Save</button></footer>
-</form></dialog>
-<dialog id="details" class="wide">
-  <h2>Account details</h2>
-  <div id="detail-content"></div>
-  <footer><button type="button" data-close>Close</button></footer>
+
+<dialog id="operation" class="tm-dialog" aria-labelledby="operation-title">
+  <div class="tm-dialog__head"><h2 class="tm-dialog__title" id="operation-title">Authentication</h2></div>
+  <div class="tm-dialog__body aa-stack">
+    <p id="progress" class="aa-progress"></p>
+    <pre id="operation-result" class="tm-code"></pre>
+    <a id="auth-url" class="aa-link" target="_blank" rel="noopener noreferrer" hidden>Open authorization page</a>
+    <div class="aa-code-row"><p id="device-code"></p><button type="button" id="copy-code" class="tm-btn tm-btn--sm tm-btn--outline" hidden>Copy code</button></div>
+    <form id="code-form" class="aa-code-form" hidden>
+      <div class="tm-field"><label class="tm-field__label" for="auth-code">Authorization code</label><input class="tm-input tm-input--mono" id="auth-code" autocomplete="off" maxlength="4096" data-clearable></div>
+      <button class="tm-btn tm-btn--primary">Submit code</button>
+    </form>
+  </div>
+  <div class="tm-dialog__foot"><button id="cancel-operation" class="tm-btn tm-btn--ghost" type="button">Cancel operation</button><button type="button" class="tm-btn tm-btn--outline" data-close>Close</button></div>
 </dialog>
+
+<dialog id="window-dialog" class="tm-dialog" aria-labelledby="window-title"><form id="window-form">
+  <div class="tm-dialog__head"><div class="aa-dialog-heading"><h2 class="tm-dialog__title" id="window-title">Usage window</h2><p id="window-status" class="tm-meta"></p></div>
+    <button type="button" class="tm-btn tm-btn--ghost tm-btn--icon tm-btn--sm" data-close aria-label="Close"><svg class="tm-icon tm-icon--sm" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" stroke="currentColor" stroke-width="1.6"/></svg></button></div>
+  <div class="tm-dialog__body aa-stack">
+    <section class="aa-dialog-section">
+      <h3 class="aa-h3">Start now</h3>
+      <p>Sends one minimal request with no tools or project context, so the provider starts counting this window now. It would reset at <strong id="window-reset" class="tm-num"></strong>.</p>
+      <div><button type="button" id="window-start" class="tm-btn tm-btn--outline">Start now</button></div>
+    </section>
+    <section class="aa-dialog-section">
+      <h3 class="aa-h3">Daily auto-start</h3>
+      <p>From this time until the tolerance ends, starts the window as soon as it is not running. At most once a day.</p>
+      <div class="aa-window-row">
+        <div class="tm-field"><label class="tm-field__label" for="auto-time">Time</label><input class="tm-input tm-input--mono" id="auto-time" placeholder="HH:MM" autocomplete="off"></div>
+        <div class="tm-field"><label class="tm-field__label" for="auto-tolerance">Tolerance (minutes)</label>
+          <div class="tm-stepper">
+            <button type="button" class="tm-stepper__btn" data-tm-step="-1" aria-label="Decrease tolerance"><svg class="tm-icon tm-icon--sm" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10" stroke="currentColor" stroke-width="1.6"/></svg></button>
+            <input class="tm-input" id="auto-tolerance" type="number" inputmode="numeric" required min="1" max="720" step="1">
+            <button type="button" class="tm-stepper__btn" data-tm-step="1" aria-label="Increase tolerance"><svg class="tm-icon tm-icon--sm" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10M8 3v10" stroke="currentColor" stroke-width="1.6"/></svg></button>
+          </div>
+        </div>
+      </div>
+      <p id="auto-zone" class="tm-meta"></p>
+    </section>
+  </div>
+  <div class="tm-dialog__foot"><button type="button" class="tm-btn tm-btn--outline" data-close>Cancel</button><button type="button" id="auto-clear" class="tm-btn tm-btn--ghost">Clear</button><button class="tm-btn tm-btn--primary">Save</button></div>
+</form></dialog>
+
+<dialog id="payment-dialog" class="tm-dialog" aria-labelledby="payment-title"><form id="payment-form">
+  <div class="tm-dialog__head"><h2 class="tm-dialog__title" id="payment-title">Last payment</h2>
+    <button type="button" class="tm-btn tm-btn--ghost tm-btn--icon tm-btn--sm" data-close aria-label="Close"><svg class="tm-icon tm-icon--sm" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" stroke="currentColor" stroke-width="1.6"/></svg></button></div>
+  <div class="tm-dialog__body aa-stack">
+    <p>Date and time of the latest receipt. The billing period ends one month later.</p>
+    <div class="tm-field"><label class="tm-field__label" for="payment-at">Paid at</label>
+      <div class="aa-payment-row"><input class="tm-input tm-input--mono" id="payment-at" required placeholder="DD.MM.YYYY HH:MM" autocomplete="off"><button type="button" id="payment-next" class="tm-btn tm-btn--outline">+1 month</button></div>
+    </div>
+  </div>
+  <div class="tm-dialog__foot"><button type="button" class="tm-btn tm-btn--outline" data-close>Cancel</button><button type="button" id="payment-clear" class="tm-btn tm-btn--ghost">Clear</button><button class="tm-btn tm-btn--primary">Save</button></div>
+</form></dialog>
+
+<dialog id="details" class="tm-dialog aa-dialog--wide" aria-labelledby="details-title">
+  <div class="tm-dialog__head"><h2 class="tm-dialog__title" id="details-title">Account details</h2>
+    <button type="button" class="tm-btn tm-btn--ghost tm-btn--icon tm-btn--sm" data-close aria-label="Close"><svg class="tm-icon tm-icon--sm" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" stroke="currentColor" stroke-width="1.6"/></svg></button></div>
+  <div class="tm-dialog__body aa-stack" id="detail-content"></div>
+  <div class="tm-dialog__foot"><button type="button" class="tm-btn tm-btn--outline" data-close>Close</button></div>
+</dialog>
+
+<dialog id="confirm-dialog" class="tm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-body"><form method="dialog">
+  <div class="tm-dialog__head"><h2 class="tm-dialog__title" id="confirm-title"></h2>
+    <button class="tm-btn tm-btn--ghost tm-btn--icon tm-btn--sm" value="cancel" aria-label="Close"><svg class="tm-icon tm-icon--sm" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" stroke="currentColor" stroke-width="1.6"/></svg></button></div>
+  <div class="tm-dialog__body" id="confirm-body"></div>
+  <div class="tm-dialog__foot"><button class="tm-btn tm-btn--outline" value="cancel" id="confirm-cancel">Cancel</button><button class="tm-btn" value="confirm" id="confirm-ok">Confirm</button></div>
+</form></dialog>
+<div class="tm-toast-region" aria-live="polite" aria-relevant="additions"></div>
 </body>
 </html>

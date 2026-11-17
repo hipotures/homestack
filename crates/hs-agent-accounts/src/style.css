@@ -1,128 +1,242 @@
-/* Agent Accounts layout on the shared AI Usage design tokens (/tokens.css). */
-* { box-sizing: border-box; }
+/* Agent Accounts: app-specific layout on The Mechanics (/vendor/the-mechanics).
+   Only layout and the provider identity color live here; every color, size and
+   space comes from --tm-* tokens. Unlayered, so it wins over the tm.* layers. */
 [hidden] { display: none !important; }
-main { max-width: 1320px; margin: 0 auto; padding: 28px 16px 64px; display: flex; flex-direction: column; gap: var(--gap-section); }
-h1 { font-size: 20px; margin: 0; font-weight: 600; letter-spacing: -.01em; }
-h2 { margin: 0; font-size: var(--fs-h2); font-weight: 600; }
-h3 { margin: 0; font-size: var(--fs-body); font-weight: 600; }
+body { margin: 0; }
 p { margin: 0; }
-.sub { font-size: var(--fs-small); color: var(--muted); }
-.top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; }
-.brand { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
-.telegram-status { display: inline-flex; color: var(--muted); }
-.telegram-status svg { display: block; flex: none; }
-.telegram-status[data-status="verified"] { color: #229ed9; }
-.telegram-status[data-status="failed"] { color: var(--up); }
-.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: var(--gap-grid); }
-.card-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; }
-.provider-codex { --agent: var(--codex); }
-.provider-claude { --agent: var(--claude); }
-.eyebrow.agent { color: var(--agent, var(--muted)); }
-.identity { display: flex; flex-direction: column; gap: 4px; }
-.pills { display: flex; flex-wrap: wrap; gap: 6px; }
-.pill { font-size: var(--fs-small); color: var(--text-2); background: var(--surface-2); border-radius: var(--radius-pill); padding: 3px 9px; }
-.pill.off { color: var(--faint); }
 
-/* quotas */
-.quotas { display: flex; flex-direction: column; gap: 14px; }
-.quota { display: flex; flex-direction: column; gap: 6px; }
-.quota-line { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
-.quota-line .num { font-size: 13px; color: var(--text-2); white-space: nowrap; }
-.bar { height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; }
-.bar > span { display: block; height: 100%; background: var(--agent, var(--heat)); border-radius: 3px; }
-.meta { font-size: var(--fs-small); color: var(--faint); }
-.reset-line { display: flex; align-items: center; gap: 6px; min-height: 22px; }
-button.icon { min-height: 22px; height: 22px; padding: 0 7px; border-color: var(--border); color: var(--muted); display: inline-flex; align-items: center; }
-button.icon:hover:not(:disabled) { color: var(--agent, var(--text)); border-color: var(--agent, var(--border-strong)); background: transparent; }
-button.icon.busy svg { display: none; }
-button.icon.busy::after { margin-left: 0; }
-.warn { font-size: var(--fs-small); color: var(--warn); }
-.newer { color: var(--agent, var(--text)); font-weight: 600; }
+.aa-main {
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: var(--tm-space-6) var(--tm-space-4) var(--tm-space-10);
+  display: flex;
+  flex-direction: column;
+  gap: var(--tm-gap-region);
+}
+.aa-head { margin-bottom: 0; align-items: center; }
+.aa-brand { display: flex; align-items: center; gap: var(--tm-space-3); min-width: 0; }
+.aa-controls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--tm-space-2); }
 
-/* controls */
-button, input, select { font: inherit; font-size: 13px; color: var(--text); }
-button { cursor: pointer; border: 1px solid var(--border-strong); background: transparent; border-radius: var(--radius-ctl); min-height: 34px; padding: 0 13px; }
-button:hover:not(:disabled) { background: var(--surface-2); }
-button:disabled { color: var(--faint); cursor: not-allowed; }
-button.busy { cursor: progress; }
-button.busy::after { content: ''; display: inline-block; width: .85em; height: .85em; margin-left: 7px; vertical-align: -.08em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .75s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
-.check-success { animation: check-success 2.4s ease-out both; }
-@keyframes check-success { 0%, 20% { color: var(--text); } 100% { color: var(--faint); } }
-@media (prefers-reduced-motion: reduce) { button.busy::after { animation-duration: 2s; } .check-success { animation-timing-function: step-end; } }
-button.primary { background: var(--surface-3); border-color: var(--border-strong); font-weight: 600; }
-button.primary:hover:not(:disabled) { background: var(--surface-2); }
-input, select { width: 100%; min-height: 38px; padding: 0 10px; background: transparent; border: 1px solid var(--border-strong); border-radius: var(--radius-ctl); }
-select option { background: var(--surface-3); }
-label { display: grid; gap: 6px; font-size: var(--fs-small); color: var(--muted); }
-.actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; padding-top: 4px; }
-.controls { display: flex; gap: 10px; align-items: center; }
-label.toggle { display: inline-flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 13px; border: 1px solid var(--border-strong); border-radius: var(--radius-ctl); font-size: 13px; color: var(--text); white-space: nowrap; cursor: pointer; }
-label.toggle:hover { background: var(--surface-2); }
-label.toggle input { appearance: none; width: 13px; min-height: 0; height: 13px; margin: 0; padding: 0; border: 1px solid var(--muted); border-radius: 3px; display: grid; place-content: center; cursor: pointer; }
-label.toggle input:checked { border-color: var(--text); }
-label.toggle input:checked::after { content: ''; width: 7px; height: 7px; border-radius: 1px; background: var(--text); }
-label.toggle:has(input:focus-visible) { outline: 2px solid var(--codex); outline-offset: 2px; }
-.seg { display: inline-flex; flex-wrap: nowrap; white-space: nowrap; gap: 2px; padding: 3px; border: 1px solid var(--border-strong); border-radius: var(--radius-ctl); }
-.seg button { border: 0; min-height: 30px; padding: 0 11px; border-radius: var(--radius-pill); color: var(--text-2); }
-.seg button:hover:not(:disabled) { color: var(--text); background: var(--surface-3); }
-.seg button:disabled { color: var(--faint); }
-.seg button.primary { color: var(--text); background: var(--surface-3); }
-.card-foot { margin-top: auto; display: flex; flex-direction: column; gap: 12px; }
-.card-foot > .actions { flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 0; padding-top: 0; }
-.slot { min-height: 1.45em; }
-.more { display: flex; flex-wrap: wrap; gap: 2px; margin-left: -8px; }
-.more button { border: 0; min-height: 30px; padding: 0 8px; color: var(--muted); white-space: nowrap; }
-.more button:hover:not(:disabled) { color: var(--text); background: transparent; }
-.more button.danger:hover { color: var(--up); }
-.link { border: 0; min-height: 0; padding: 0; color: var(--tok-uncached); text-decoration: underline; }
-.link:hover:not(:disabled) { background: none; }
-a { color: var(--tok-uncached); overflow-wrap: anywhere; }
+/* Telegram notification state: normal (verified) is quiet, failure is loud. */
+.aa-telegram { display: inline-flex; color: var(--tm-text-3); }
+.aa-telegram svg { display: block; flex: none; }
+.aa-telegram[data-status="verified"] { color: var(--tm-text-2); }
+.aa-telegram[data-status="disabled"],
+.aa-telegram[data-status="pending"] { color: var(--tm-line-disabled); }
+.aa-telegram[data-status="failed"] { color: var(--tm-danger); }
 
-/* runtimes */
-.runtimes { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: var(--gap-grid); }
-.runtime { background: var(--surface-2); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
-.runtime .actions { margin-top: 4px; justify-content: flex-start; }
-.runtime .seg { flex-wrap: wrap; max-width: 100%; }
+.aa-filter { align-items: center; font-size: var(--tm-text-sm); color: var(--tm-text-2); }
+.aa-filter > input { margin-top: 0; }
+.aa-empty { padding: var(--tm-space-4); color: var(--tm-text-2); border-right: var(--tm-bw-1) solid var(--tm-line-1); border-bottom: var(--tm-bw-1) solid var(--tm-line-1); }
 
-/* messages and footer */
-.error { color: var(--up); font-size: var(--fs-small); }
-#notice { border: 1px solid var(--up); border-radius: var(--radius-ctl); padding: 8px 12px; }
-#notice:empty { display: none; }
-.foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; font-size: var(--fs-small); color: var(--faint); }
+/* Provider identity: the only decorative color on the page (name + usage bars).
+   Slots chosen per theme so Claude stays warm, Codex green, Antigravity blue. */
+/* The agents' own colors from the original page (identity, not theme slots):
+   light values on Light, the brighter values on the dark themes. */
+.provider-claude { --aa-agent: #c96442; }
+.provider-codex { --aa-agent: #14936f; }
+.provider-antigravity { --aa-agent: #2f6fb8; }
+:root:is([data-tm-theme="dark"], [data-tm-theme="coffee"]) .provider-claude { --aa-agent: #e0876a; }
+:root:is([data-tm-theme="dark"], [data-tm-theme="coffee"]) .provider-codex { --aa-agent: #2bb58f; }
+:root:is([data-tm-theme="dark"], [data-tm-theme="coffee"]) .provider-antigravity { --aa-agent: #5b9bd5; }
+/* Chart slots are tuned for 3:1 graphics; the small provider name mixes in
+   some text color so it also reaches 4.5:1 as text in every theme. */
+.aa-provider { color: color-mix(in oklab, var(--aa-agent, var(--tm-text-2)) 72%, var(--tm-text)); }
 
-/* dialogs */
-dialog { background: var(--surface); color: var(--text); border: 1px solid var(--border-strong); border-radius: var(--radius-card); padding: var(--pad-card); width: min(560px, 95vw); max-height: 90vh; overflow: auto; box-shadow: 0 12px 32px rgba(0,0,0,.35); }
-dialog.wide { width: min(860px, 95vw); }
-dialog::backdrop { background: rgba(0,0,0,.6); }
-dialog h2 { margin-bottom: 16px; }
-dialog form, #detail-content { display: flex; flex-direction: column; gap: 12px; }
-dialog footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
-#progress { color: var(--text-2); }
-pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px var(--font-mono); color: var(--muted); margin: 8px 0; }
-pre:empty { display: none; }
-.code-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 8px 0; }
-.code-row:has(#device-code:empty) { display: none; }
-#device-code { font: 24px var(--font-mono); letter-spacing: .08em; user-select: all; }
-.facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; font-size: 13px; }
-.facts dt { color: var(--muted); }
-.facts dd { margin: 0; overflow-wrap: anywhere; }
-.history { border-collapse: collapse; font-size: 13px; display: block; overflow-x: auto; }
-.history th, .history td { text-align: left; padding: 5px 18px 5px 0; white-space: nowrap; }
-.history th { color: var(--muted); font-weight: 600; font-size: var(--fs-small); border-bottom: 1px solid var(--border); }
-.history td { font-family: var(--font-mono); color: var(--text-2); }
-button:focus-visible, a:focus-visible { outline: 2px solid var(--codex); outline-offset: 2px; }
-@media (max-width: 640px) { .seg { flex-wrap: wrap; } }
+/* Account panel */
+.aa-account__head { flex-wrap: nowrap; }
+.aa-account__title { overflow-wrap: anywhere; }
+.aa-period {
+  flex: none;
+  font-family: var(--tm-font-mono);
+  font-size: var(--tm-text-xs);
+  color: var(--tm-text-3);
+  white-space: nowrap;
+  cursor: help;
+}
+.aa-period--manual {
+  cursor: pointer;
+  min-height: 0;
+  padding: 0 2px;
+  font-family: var(--tm-font-mono);
+  font-weight: var(--tm-weight-regular);
+  color: var(--tm-text-2);
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+.aa-period--unset { color: var(--tm-text-3); }
+.aa-account__body { display: flex; flex-direction: column; gap: var(--tm-space-2); padding-top: var(--tm-space-1); }
+.aa-email { font-family: var(--tm-font-mono); font-size: var(--tm-text-xs); color: var(--tm-text-2); overflow-wrap: anywhere; }
+.aa-slot { min-height: 1.45em; }
+.aa-status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--tm-space-1) var(--tm-space-1-5); font-family: var(--tm-font-mono); font-size: var(--tm-text-xs); color: var(--tm-text-2); }
+.aa-sep { color: var(--tm-text-3); }
+.aa-group { width: auto; max-width: 100%; align-self: flex-start; }
 
-.profile-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.profile-head .identity { min-width: 0; overflow-wrap: anywhere; flex: 1; }
-.period { white-space: nowrap; cursor: help; }
-.period.manual { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
-.period.unset { opacity: .5; }
-.payment-row { display: flex; gap: 8px; align-items: center; }
-.payment-row input { flex: 1; }
-.window-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-#window-dialog h3 { margin-top: 8px; }
-.profile-head select { width: auto; max-width: 100%; min-height: 34px; }
-.provider-antigravity { --agent: var(--heat); }
-.provider-antigravity .quotas { min-height: 196px; }
+.aa-quotas { display: flex; flex-direction: column; gap: var(--tm-space-3); margin-top: var(--tm-space-2); }
+.provider-antigravity .aa-quotas { min-height: 12.25rem; }
+.aa-quota { display: flex; flex-direction: column; gap: var(--tm-space-1-5); }
+.aa-quota__line { display: flex; justify-content: space-between; align-items: baseline; gap: var(--tm-space-3); }
+.aa-quota__name { font-weight: var(--tm-weight-medium); }
+.aa-quota__num { font-size: var(--tm-text-xs); color: var(--tm-text-2); white-space: nowrap; }
+.aa-bar { color: var(--aa-agent, var(--tm-text-2)); }
+.aa-reset { display: flex; align-items: center; gap: var(--tm-space-1-5); min-height: var(--tm-control-sm); flex-wrap: wrap; }
+.aa-reset .tm-meta { font-family: var(--tm-font-mono); }
+.aa-start[aria-busy="true"] svg { display: none; }
+
+/* Attention lines: shape marker + tone color. Normal lines stay muted. */
+.aa-msg { display: flex; align-items: flex-start; gap: var(--tm-space-1-5); font-size: var(--tm-text-xs); overflow-wrap: anywhere; }
+.aa-msg > .tm-mark { flex: none; margin-top: 0.1em; }
+.aa-msg--warning { color: var(--tm-warning); }
+.aa-msg--error { color: var(--tm-danger); }
+
+.aa-account__foot { flex-direction: column; align-items: stretch; justify-content: flex-start; gap: var(--tm-space-2); }
+.tm-panel-grid > .aa-account > .aa-account__foot { border-top-color: var(--tm-line-3); }
+.aa-account__foot .tm-meta { font-family: var(--tm-font-mono); }
+.aa-actions { display: flex; flex-direction: column; gap: var(--tm-space-1); }
+.aa-actions__main,
+.aa-actions__more { display: flex; flex-wrap: wrap; align-items: center; gap: var(--tm-space-1); }
+.aa-actions__main > .tm-btn--ghost:first-child,
+.aa-actions__more > .tm-btn:first-child { margin-left: calc(var(--tm-control-pad-x-sm) * -1); }
+.aa-actions .tm-btn--ghost,
+.aa-runtime__actions .tm-btn--ghost { font-weight: var(--tm-weight-medium); }
+.aa-actions__more > .tm-btn { color: var(--tm-text-2); font-weight: var(--tm-weight-regular); }
+.aa-actions__more > .tm-btn:hover:not(:disabled) { color: var(--tm-text); }
+
+@keyframes aa-check-success { 0%, 20% { color: var(--tm-text); } 100% { color: var(--tm-text-3); } }
+.aa-check-success { animation: aa-check-success 2.4s ease-out both; }
+@media (prefers-reduced-motion: reduce) { .aa-check-success { animation-timing-function: step-end; } }
+
+/* Runtimes */
+.aa-runtime__body { display: flex; flex-direction: column; gap: var(--tm-space-1-5); }
+.aa-runtime__body .tm-meta { font-family: var(--tm-font-mono); }
+.aa-nowrap { white-space: nowrap; }
+.aa-versions { white-space: normal; }
+/* A newer version is the only colored number: the agent's color; same version stays grey. */
+.aa-newer { color: color-mix(in oklab, var(--aa-agent, var(--tm-text)) 80%, var(--tm-text)); font-weight: var(--tm-weight-semibold); }
+.aa-runtime__actions { margin-top: auto; padding-top: var(--tm-space-2); }
+
+.aa-foot { padding-top: var(--tm-space-2); font-family: var(--tm-font-mono); }
+
+/* Dialogs */
+.tm-dialog form { display: contents; }
+.aa-dialog--wide { width: min(54rem, calc(100vw - 2rem)); }
+.aa-stack { display: flex; flex-direction: column; gap: var(--tm-space-3); }
+.aa-dialog-heading { display: grid; gap: 2px; min-width: 0; }
+.aa-dialog-section { display: flex; flex-direction: column; gap: var(--tm-space-2); }
+.aa-dialog-section + .aa-dialog-section { padding-top: var(--tm-space-3); border-top: var(--tm-bw-3) solid var(--tm-line-3); }
+.aa-h3 { margin: 0; font-size: var(--tm-text-sm); font-weight: var(--tm-weight-semibold); color: var(--tm-text); }
+.aa-window-row { display: grid; grid-template-columns: 1fr 1fr; gap: var(--tm-space-3); }
+.aa-payment-row { display: flex; gap: var(--tm-space-2); align-items: center; }
+.aa-payment-row > .tm-input { flex: 1; min-width: 0; }
+.aa-progress { color: var(--tm-text); }
+.aa-link { color: var(--tm-link); overflow-wrap: anywhere; }
+.aa-link:hover { color: var(--tm-link-hover); }
+#operation-result { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+#operation-result:empty { display: none; }
+.aa-code-row { display: flex; align-items: center; gap: var(--tm-space-3); flex-wrap: wrap; }
+.aa-code-row:has(#device-code:empty) { display: none; }
+#device-code { font-family: var(--tm-font-mono); font-size: var(--tm-text-2xl); letter-spacing: var(--tm-tracking-wide); color: var(--tm-text); user-select: all; }
+.aa-code-form { display: flex; flex-direction: column; align-items: flex-start; gap: var(--tm-space-2); }
+.aa-code-form > .tm-field { align-self: stretch; }
+.aa-facts { display: grid; grid-template-columns: max-content 1fr; gap: var(--tm-space-1-5) var(--tm-space-4); margin: 0; }
+.aa-facts dt { color: var(--tm-text-3); }
+.aa-facts dd { margin: 0; color: var(--tm-text); overflow-wrap: anywhere; }
+.aa-history { overflow-x: auto; }
+.aa-history td, .aa-history th { white-space: nowrap; }
+.aa-mono { font-family: var(--tm-font-mono); }
+
+@media (max-width: 640px) {
+  .aa-main { padding: var(--tm-space-4) var(--tm-space-4) var(--tm-space-8); }
+  .aa-window-row { grid-template-columns: 1fr; }
+  .aa-account__head { flex-wrap: wrap; }
+  .aa-period--manual { margin-left: calc(-2px - var(--tm-bw-control)); }
+}
+
+/* Variant: separate, free-standing panels instead of one framed grid. */
+.aa-section { display: grid; gap: var(--tm-space-2); }
+.aa-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr));
+  gap: var(--tm-gap-region);
+  align-items: start;
+}
+.aa-cards > .tm-panel { height: 100%; }
+.aa-section .tm-section-head { margin: 0; }
+.aa-section .tm-section-head > .aa-filter { margin-left: auto; }
+.aa-cards > .tm-panel > .aa-account__foot { border-top-color: var(--tm-line-3); }
+
+/* Problems inline: same size as the text they annotate, no icons. */
+.aa-quota__head { display: inline-flex; align-items: baseline; flex-wrap: wrap; min-width: 0; }
+.aa-quota__flag { margin-left: 0.4em; font-size: var(--tm-text-xs); font-weight: var(--tm-weight-regular); color: var(--tm-warning); white-space: nowrap; }
+/* Exhausted: the agent's own color, a step darker — never another hue. */
+.aa-quota.is-exhausted .aa-bar { color: color-mix(in oklab, var(--aa-agent) 72%, #000); }
+.aa-stale { color: var(--tm-warning); }
+/* Inactive account: figures are the past — neutral bars, muted values, one note. */
+.aa-account.is-inactive .aa-bar { color: var(--tm-line-disabled); }
+.aa-account.is-inactive .aa-quota__name,
+.aa-account.is-inactive .aa-quota__num,
+.aa-account.is-inactive .aa-provider { color: var(--tm-text-2); font-weight: var(--tm-weight-regular); }
+.aa-inactive-note { margin: 0; font-size: var(--tm-text-xs); color: var(--tm-text-2); }
+
+
+
+/* Runtime details on demand. */
+.aa-info { margin-left: 0.4em; vertical-align: 0.05em; }
+.aa-info__btn { display: inline-flex; padding: 0; border: 0; background: transparent; color: var(--tm-text-3); cursor: help; }
+.aa-info__btn:hover { color: var(--tm-text-2); }
+.aa-info__bubble { white-space: pre-line; font-weight: var(--tm-weight-regular); min-width: 16rem; }
+.aa-runtime .tm-panel__title { display: inline-flex; align-items: center; }
+
+/* Account line: same height in every card (fits the small group select), so
+   the limits start on one level across the row. */
+.aa-account-line { display: flex; align-items: center; justify-content: space-between; gap: var(--tm-space-2); min-height: var(--tm-control-sm); }
+.aa-account-line > .aa-status { margin: 0; min-width: 0; }
+.aa-account-line > .aa-group { width: auto; flex: none; margin-left: auto; }
+.aa-auth-problem { color: var(--tm-warning); }
+.aa-account.is-inactive .aa-auth-problem { color: var(--tm-text-2); }
+
+.aa-plan { margin-left: 0.28em; font-weight: var(--tm-weight-regular); color: var(--tm-text-2); }
+
+/* the title is a flex row with a gap; spacing around "· plan" comes from margins only */
+.aa-account__title { gap: 0; }
+/* Rare action: a quiet icon in the page head, not a primary button. */
+.aa-add #add { color: var(--tm-text-2); }
+.aa-add #add:hover { color: var(--tm-text); }
+.aa-add > .tm-tip__bubble { left: auto; right: 0; transform: none; translate: none; white-space: nowrap; }
+
+.aa-theme #theme { color: var(--tm-text-2); }
+.aa-theme #theme:hover { color: var(--tm-text); }
+.aa-theme > .tm-tip__bubble { left: auto; right: 0; transform: none; translate: none; white-space: nowrap; }
+
+.aa-tipwrap--start > .tm-tip__bubble { left: -0.4em; transform: none; translate: none; }
+.aa-tipwrap--end > .tm-tip__bubble { left: auto; right: 0; transform: none; translate: none; }
+
+/* Telegram status: our line icon (paper plane), quiet; color only for trouble. */
+.aa-telegram { display: inline-flex; }
+.aa-telegram:focus-visible { outline: 0; box-shadow: var(--tm-focus-lift); }
+
+.aa-swap { display: inline-grid; }
+.aa-swap > * { grid-area: 1 / 1; }
+.aa-swap__alt { visibility: hidden; }
+/* Inactive means every colored detail goes quiet, warnings included. */
+.aa-account.is-inactive .aa-quota__flag,
+.aa-account.is-inactive .aa-stale,
+.aa-account.is-inactive .aa-plan { color: var(--tm-text-2); }
+.aa-account.is-inactive .aa-quota.is-exhausted .aa-bar { color: var(--tm-line-disabled); }
+
+.aa-has-details { text-decoration: underline dotted; text-underline-offset: 0.25em; text-decoration-color: var(--tm-text-3); cursor: help; }
+.aa-has-details:focus-visible { outline: 0; box-shadow: var(--tm-focus-lift); }
+
+/* Toast ↔ panel: while a toast is hovered or focused, the panel it is about
+   takes the toast's tone on its frame. Hue alone is not enough: in Dark and
+   Coffee the frame is light ink and the state colors are light too, so the
+   frame also doubles in weight with an outer outline (outline takes no space:
+   nothing moves; the cards have gaps between them). */
+.tm-panel.aa-flag { --_flag: var(--tm-info); border-color: var(--_flag); outline: var(--tm-bw-1) solid var(--_flag); outline-offset: 0; }
+.tm-panel.aa-flag[data-flag="danger"] { --_flag: var(--tm-danger); }
+.tm-panel.aa-flag[data-flag="warning"] { --_flag: var(--tm-warning); }
+.tm-panel.aa-flag[data-flag="success"] { --_flag: var(--tm-success); }
+/* The toast title is a quiet link to its panel. */
+.aa-toast__to { display: block; padding: 0; border: 0; background: none; font-family: inherit; font-size: inherit; line-height: inherit; color: inherit; text-align: left; cursor: pointer; }
+.aa-toast__to:hover { text-decoration: underline; text-underline-offset: 0.2em; }
+.aa-toast__to:focus-visible { outline: 0; box-shadow: var(--tm-focus-lift); }
