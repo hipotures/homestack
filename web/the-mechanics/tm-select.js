@@ -1,5 +1,5 @@
 /* Select option list fallback (Firefox and other browsers without appearance: base-select),
-   ported from The Mechanics playground (src/playground/lib.js). */
+   ported from The Mechanics playground (src/playground/lib.js). Shared by Agent Accounts and AI Usage. */
 'use strict';
 (function () {
 function anchorPopover(pop, anchor) {
