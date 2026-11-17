@@ -530,10 +530,9 @@ read raw for the missing hours.
 
 The Alpine `homestack-usage` binary embeds its HTML, vanilla JavaScript,
 Datastar 1.0.4 and Apache ECharts 6.1.0. Vendor releases, licenses, download
-provenance and SHA-256 checksums are in `crates/hs-usage/assets/`. Part of the
-UI uses the shared design system, a pinned subtree also embedded in the binary
-([AI Usage on the shared design system](ai-usage-design-system.md)). There are no
-runtime CDN requests. The startup-only LiteLLM download supplies OpenAI token
+provenance and SHA-256 checksums are in `crates/hs-usage/assets/`. The UI uses
+The Mechanics design system from `vendor/the-mechanics/`, also embedded in the
+binary. There are no runtime CDN requests. The startup-only LiteLLM download supplies OpenAI token
 prices; a failed download leaves estimated costs explicitly unavailable until
 restart. Claude Code cost comes from its reported USD counter. Pangolin remains
 the HTTPS and authentication boundary. Health, heartbeat, service status and

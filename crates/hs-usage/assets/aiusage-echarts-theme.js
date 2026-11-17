@@ -1,15 +1,11 @@
-/* AI Usage — ECharts 6 theme + helpers
+/* AI Usage — ECharts 6 theme and helpers on The Mechanics tokens.
  *
- * Usage:
- *   <link rel="stylesheet" href="aiusage-tokens.css">
- *   <script src="echarts.min.js"></script>
- *   <script src="aiusage-echarts-theme.js"></script>
+ *   const chart = AIUsage.init(el);   // registers the theme of the active data-tm-theme and inits (SVG renderer)
+ *   chart.setOption({ series: [AIUsage.bar('Codex · gpt-6.1-sol', data, 'Codex · gpt-6.1-sol')] });
  *
- *   const chart = AIUsage.init(el);                // registers + inits with the current theme
- *   chart.setOption({ series: [AIUsage.bar('Codex · gpt-6.1-sol', data, 'gpt-6.1-sol')] });
- *
- * Colors are read from the CSS variables in aiusage-tokens.css, so a light/dark
- * switch is: change data-theme on <html>, then AIUsage.refresh().
+ * Every color comes from CSS: --tm-* tokens (The Mechanics, vendor/the-mechanics) and the AI Usage identity
+ * colors in aiusage.css. After a theme switch, AIUsage.refresh() rebuilds the theme and repaints every chart.
+ * The theme object follows The Mechanics ECharts adapter (src/the-mechanics/adapters/echarts.js, v0.1.2).
  */
 (function (global) {
   'use strict';
@@ -17,46 +13,41 @@
   const THEME = 'aiusage';
   const charts = new Set();
 
-  const v = (name) =>
-    getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const v = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 
-  const alpha = (hex, a) => {
-    const h = hex.replace('#', '');
-    const n = parseInt(h.length === 3 ? h.replace(/./g, '$&$&') : h, 16);
-    return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
-  };
-
-  /* ---------- series colors: agent → hue, model → shade ---------- */
-  const AGENT_VAR = { antigravity: '--tok-reasoning', codex: '--codex', 'claude code': '--claude', claude: '--claude' };
+  /* ---------- series colors: agent → identity hue, model → a tone of that hue ---------- */
+  const AGENT_VAR = { antigravity: '--aiu-antigravity', codex: '--aiu-codex', 'claude code': '--aiu-claude', claude: '--aiu-claude' };
   const MODEL_VAR = {
-    'gpt-6.1-sol': '--m-gpt-6-1-sol',
-    'gpt-5.6-luna': '--m-gpt-5-6-luna',
-    'claude-opus-5-5': '--m-claude-opus-5-5',
-    'claude-haiku-5-5': '--m-claude-haiku-5-5',
-    'claude-sonnet-5-5': '--m-claude-sonnet-5-5',
+    'gpt-6.1-sol': '--aiu-m-gpt-6-1-sol',
+    'gpt-5.6-luna': '--aiu-m-gpt-5-6-luna',
+    'claude-opus-5-5': '--aiu-m-claude-opus-5-5',
+    'claude-haiku-5-5': '--aiu-m-claude-haiku-5-5',
+    'claude-sonnet-5-5': '--aiu-m-claude-sonnet-5-5',
   };
-  // Models without a dedicated token: well-separated light, mid and dark tones of the agent hue,
-  // distinct from the dedicated model colors.
-  const EXTRA_TONES = {
-    '--tok-reasoning': ['#d4c3f1', '#9c80cc', '#6f51a0'],
-    '--claude': ['#f7d6c2', '#c2502a', '#5e2513'],
-    '--codex': ['#c6efe1', '#13866a', '#0b4535'],
-  };
+  /** Mixes a #rrggbb color toward white (f > 0) or black (f < 0). */
+  function shade(hex, f) {
+    const n = parseInt(String(hex).replace('#', ''), 16);
+    if (Number.isNaN(n)) return hex;
+    const mix = (c) => Math.round(f > 0 ? c + (255 - c) * f : c * (1 + f));
+    return '#' + [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((c) => mix(c).toString(16).padStart(2, '0')).join('');
+  }
+  // Models without a dedicated token: well-separated light, mid and dark tones of the agent hue.
+  const EXTRA_TONES = [0.45, -0.2, -0.5];
   function colorFor(key) {
     const k = String(key || '').toLowerCase();
     if (MODEL_VAR[k]) return v(MODEL_VAR[k]);
     for (const m in MODEL_VAR) if (k.includes(m)) return v(MODEL_VAR[m]);
     for (const a in AGENT_VAR) {
       if (!k.startsWith(a)) continue;
-      // "Agent · model" keys without a dedicated token get a stable shade of the agent hue.
+      // "Agent · model" keys without a dedicated token get a stable tone of the agent hue.
       const rest = k.slice(a.length).replace(/^\s*·\s*/, '');
       if (!rest) return v(AGENT_VAR[a]);
       let h = 0;
       for (const ch of rest) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-      const tones = EXTRA_TONES[AGENT_VAR[a]];
-      return tones[h % tones.length];
+      return shade(v(AGENT_VAR[a]), EXTRA_TONES[h % EXTRA_TONES.length]);
     }
-    return v('--muted');
+    return v('--tm-text-3');
   }
 
   /* ---------- formatters ---------- */
@@ -106,87 +97,68 @@
     return steps.find((s) => spanMs / s <= 80) || steps[steps.length - 1];
   }
 
-  /* ---------- theme ---------- */
+  /* ---------- theme (The Mechanics chart grammar) ---------- */
   function build() {
-    const text = v('--text'), muted = v('--muted'), faint = v('--faint');
-    const grid = v('--grid'), axis = v('--axis');
-    const sans = v('--font-sans'), mono = v('--font-mono');
-
-    const axisCommon = {
-      axisLine: { show: false, lineStyle: { color: axis } },
-      axisTick: { show: false },
-      axisLabel: { color: faint, fontFamily: mono, fontSize: 11, margin: 12 },
-      splitLine: { show: false, lineStyle: { color: grid, type: [3, 4] } },
-      nameTextStyle: { color: muted, fontFamily: sans, fontSize: 11 },
-    };
-
+    const text = v('--tm-text'), text2 = v('--tm-text-2'), text3 = v('--tm-text-3');
+    const grid = v('--tm-chart-grid'), axis = v('--tm-chart-axis'), mono = v('--tm-font-mono'), ui = v('--tm-font-ui');
+    // Chart text: Plex Mono medium 11px; axis numbers in --tm-text-2; bold only in tooltips.
+    const axisLabel = { color: text2, fontFamily: mono, fontSize: 11, fontWeight: 500, hideOverlap: true, margin: 10 };
+    const axisName = { color: text2, fontFamily: mono, fontSize: 11, fontWeight: 500 };
+    const baseAxis = { axisLine: { show: true, lineStyle: { color: axis, width: 1 } }, axisTick: { show: false }, axisLabel, nameTextStyle: axisName, splitLine: { show: false } };
     return {
-      color: [v('--codex'), v('--claude'), v('--tok-reasoning'), v('--tok-uncached'),
-              v('--claude-lo'), v('--codex-lo'), v('--warn')],
+      color: [1, 2, 3, 4, 5, 6, 7, 8].map((i) => v(`--tm-chart-${i}`)),
       backgroundColor: 'transparent',
-      textStyle: { fontFamily: sans, color: text },
-
-      title: { left: 0, textStyle: { color: text, fontSize: 15, fontWeight: 600 },
-               subtextStyle: { color: muted, fontSize: 12 } },
-
-      grid: { left: 8, right: 8, top: 24, bottom: 8, containLabel: true },
-
+      textStyle: { fontFamily: mono, fontSize: 11, color: text2 },
+      grid: { left: 4, right: 14, top: 28, bottom: 2, containLabel: true },
+      categoryAxis: baseAxis,
+      timeAxis: baseAxis,
+      valueAxis: { ...baseAxis, axisLine: { show: false }, splitNumber: 3, splitLine: { show: true, lineStyle: { color: grid, width: 1 } } },
+      logAxis: { ...baseAxis, axisLine: { show: false }, splitLine: { show: true, lineStyle: { color: grid, width: 1 } } },
       legend: {
-        top: 0, right: 0, icon: 'roundRect', itemWidth: 10, itemHeight: 10, itemGap: 16,
-        textStyle: { color: muted, fontSize: 12 },
-        inactiveColor: faint,
+        top: 0, right: 0, icon: 'rect', itemWidth: 10, itemHeight: 10, itemGap: 14,
+        textStyle: { color: text, fontFamily: mono, fontSize: 11, fontWeight: 500 },
+        inactiveColor: text3,
+        pageTextStyle: { color: text2, fontFamily: mono },
+        pageIconColor: text, pageIconInactiveColor: text3,
       },
-
       tooltip: {
         trigger: 'axis',
-        backgroundColor: v('--surface-3'),
+        backgroundColor: v('--tm-surface'),
+        borderColor: v('--tm-line-1'),
         borderWidth: 1,
-        borderColor: v('--border-strong'),
-        padding: [8, 12],
-        textStyle: { color: text, fontSize: 12, fontFamily: sans },
-        extraCssText: 'border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.35);backdrop-filter:blur(8px);',
+        padding: [6, 8],
+        textStyle: { color: text, fontFamily: ui, fontSize: 12 },
+        // Hard offset shadow, no radius; below sticky chrome.
+        extraCssText: 'border-radius:0;box-shadow:var(--tm-shadow-raised);z-index:var(--tm-z-sticky);',
         axisPointer: {
           type: 'shadow',
-          shadowStyle: { color: alpha(v('--text').startsWith('#') ? v('--text') : '#ffffff', 0.04) },
-          lineStyle: { color: axis, type: [3, 4] },
-          crossStyle: { color: axis },
-          label: { backgroundColor: v('--surface-3'), color: text, fontFamily: mono },
+          shadowStyle: { color: v('--tm-hover') },
+          lineStyle: { color: text2, type: [2, 2], width: 1 },
+          crossStyle: { color: text2 },
+          label: { backgroundColor: v('--tm-surface'), color: text, fontFamily: mono, borderColor: v('--tm-line-1'), borderWidth: 1 },
         },
       },
-
-      categoryAxis: { ...axisCommon, axisLine: { show: true, lineStyle: { color: axis } } },
-      timeAxis:     { ...axisCommon, axisLine: { show: true, lineStyle: { color: axis } } },
-      valueAxis:    { ...axisCommon, splitNumber: 3, splitLine: { show: true, lineStyle: { color: grid, type: [3, 4] } } },
-      logAxis:      { ...axisCommon, splitLine: { show: true, lineStyle: { color: grid, type: [3, 4] } } },
-
-      bar: {
-        barMaxWidth: 18, barCategoryGap: '30%',
-        // Square corners: rounding applies to every stacked segment and makes each one look capped.
-        emphasis: { focus: 'series' },
-      },
-      line: {
-        symbol: 'none', smooth: 0.25, lineStyle: { width: 2 },
-        emphasis: { focus: 'series', lineStyle: { width: 2 } },
-      },
-      scatter: { symbolSize: 6 },
-      heatmap: { itemStyle: { borderRadius: 4, borderColor: v('--surface'), borderWidth: 3 } },
+      bar: { barMaxWidth: 18, barCategoryGap: '30%', itemStyle: { borderRadius: 0 }, emphasis: { disabled: true } },
+      line: { symbol: 'none', smooth: false, symbolSize: 6, lineStyle: { width: 2 }, emphasis: { disabled: true } },
+      scatter: { symbolSize: 9, emphasis: { disabled: true } },
+      heatmap: { itemStyle: { borderColor: v('--tm-surface'), borderWidth: 2 } },
       visualMap: {
-        inRange: { color: [v('--heat-empty'), alpha(v('--heat'), 0.35), v('--heat')] },
-        textStyle: { color: faint, fontSize: 11 },
+        inRange: { color: [v('--tm-heat-lo'), v('--tm-heat-hi')] },
+        textStyle: { color: text2, fontFamily: mono, fontSize: 11 },
         itemWidth: 10, itemHeight: 120,
       },
       dataZoom: {
         backgroundColor: 'transparent',
-        borderColor: v('--border'),
-        fillerColor: alpha(v('--codex'), 0.12),
-        handleStyle: { color: v('--surface-3'), borderColor: v('--border-strong') },
-        moveHandleStyle: { color: v('--surface-3') },
-        dataBackground: { lineStyle: { color: faint, width: 1 }, areaStyle: { color: v('--track') } },
-        selectedDataBackground: { lineStyle: { color: v('--codex') }, areaStyle: { color: alpha(v('--codex'), 0.2) } },
-        textStyle: { color: faint, fontFamily: mono, fontSize: 11 },
+        borderColor: v('--tm-line-3'),
+        fillerColor: v('--tm-hover'),
+        handleStyle: { color: v('--tm-surface'), borderColor: v('--tm-line-1') },
+        moveHandleStyle: { color: v('--tm-surface') },
+        dataBackground: { lineStyle: { color: text3, width: 1 }, areaStyle: { color: v('--tm-inset') } },
+        selectedDataBackground: { lineStyle: { color: text2 }, areaStyle: { color: v('--tm-hover') } },
+        textStyle: { color: text2, fontFamily: mono, fontSize: 11 },
       },
-      markLine: { symbol: 'none', lineStyle: { color: axis, type: [3, 4] }, label: { color: muted, fontSize: 11 } },
-      markArea: { itemStyle: { color: alpha('#ffffff', 0.025) }, label: { color: faint, fontSize: 11 } },
+      markLine: { symbol: 'none', lineStyle: { color: v('--tm-chart-threshold'), type: [5, 3], width: 1.5 }, label: { color: text2, fontFamily: mono, fontSize: 11 } },
+      markArea: { itemStyle: { color: v('--tm-hover') }, label: { color: text2, fontFamily: mono, fontSize: 11 } },
     };
   }
 
@@ -194,73 +166,54 @@
 
   function init(el, opts) {
     register();
-    const c = echarts.init(el, THEME, { renderer: 'canvas', ...opts });
+    const c = echarts.init(el, THEME, { renderer: 'svg', ...opts });
     charts.add(c);
     new ResizeObserver(() => c.resize()).observe(el);
     return c;
   }
 
-  /** after toggling data-theme: rebuild the theme from CSS vars and repaint */
+  /** after changing data-tm-theme: rebuild the theme from CSS tokens and repaint */
   function refresh() {
     register();
     for (const c of charts) {
       if (c.isDisposed()) { charts.delete(c); continue; }
-      if (typeof c.setTheme === 'function') c.setTheme(THEME);   // ECharts 6
-      else {                                                    // fallback
-        const opt = c.getOption(), el = c.getDom();
-        c.dispose(); charts.delete(c);
-        init(el).setOption(opt);
-      }
+      c.setTheme(THEME);
     }
   }
 
   /* ---------- series helpers ---------- */
   function bar(name, data, colorKey, extra) {
-    return { type: 'bar', name, data, stack: 'total', itemStyle: { color: colorFor(colorKey || name) }, ...extra };
+    return { type: 'bar', name, data, stack: 'total', barMinHeight: 0, itemStyle: { color: colorFor(colorKey || name) }, ...extra };
   }
-  function area(name, data, colorKey, extra) {
-    const c = colorFor(colorKey || name);
-    return {
-      type: 'line', name, data, stack: extra && extra.stack,
-      lineStyle: { color: c, width: 2 }, itemStyle: { color: c },
-      areaStyle: {
-        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-          { offset: 0, color: alpha(c, 0.28) }, { offset: 1, color: alpha(c, 0) },
-        ]),
-      },
-      ...extra,
-    };
-  }
-  /** peak marker with a compact label */
+  /** Boxed peak callout above the highest stack (The Mechanics peakMarker). */
   function peak(formatter = (p) => p.value) {
     return {
-      symbol: 'roundRect', symbolSize: [1, 1],
-      label: { show: true, position: 'top', distance: 8, color: v('--text'),
-               backgroundColor: v('--surface-3'), borderColor: v('--border-strong'), borderWidth: 1,
-               borderRadius: 8, padding: [5, 9], fontFamily: v('--font-mono'), fontSize: 12,
-               formatter },
+      silent: true, symbol: 'rect', symbolSize: 1, itemStyle: { color: 'transparent' },
+      label: { show: true, position: 'top', distance: 8, color: v('--tm-text'),
+               backgroundColor: v('--tm-surface'), borderColor: v('--tm-line-1'), borderWidth: 1,
+               padding: [3, 6], fontFamily: v('--tm-font-mono'), fontSize: 11, fontWeight: 600, formatter },
       data: [{ type: 'max' }],
     };
   }
   /** drop series that are all zero/null — no empty legends */
   const nonEmpty = (series) => series.filter((s) => (s.data || []).some((d) => (Array.isArray(d) ? d[1] : d?.value ?? d) > 0));
 
-  /** axis tooltip: name, colored dot, mono value, hides zero rows */
+  /** Tooltip markup in The Mechanics chart-tooltip grammar: bold mono title, swatch · name · value rows. */
+  function tipTitle(text) { return `<div class="tm-chart-tooltip__title">${esc(text)}</div>`; }
+  function tipRow(name, value, { color, muted, html } = {}) {
+    const swatch = color ? `<span class="tm-legend__swatch" style="--_series:${esc(color)}"></span>` : '';
+    return `<div class="tm-chart-tooltip__row${muted ? ' aiu-tip-muted' : ''}">${swatch}<span>${html ? name : esc(name)}</span><span>${html ? value : esc(value)}</span></div>`;
+  }
+  /** axis tooltip: title, swatch rows with mono values, hides zero rows */
   function tooltipFormatter(valueFmt = fmt.tokens) {
     return (params) => {
       const rows = params
         .filter((p) => (Array.isArray(p.value) ? p.value[1] : p.value) > 0)
-        .map((p) => {
-          const val = Array.isArray(p.value) ? p.value[1] : p.value;
-          return `<div style="display:flex;justify-content:space-between;gap:16px">
-            <span>${p.marker}${p.seriesName}</span>
-            <span style="font-family:${v('--font-mono')}">${valueFmt(val)}</span></div>`;
-        });
-      const head = `<div style="color:${v('--muted')};margin-bottom:4px">${params[0]?.axisValueLabel ?? ''}</div>`;
-      return head + (rows.join('') || `<span style="color:${v('--faint')}">no data</span>`);
+        .map((p) => tipRow(p.seriesName, valueFmt(Array.isArray(p.value) ? p.value[1] : p.value), { color: p.color }));
+      return tipTitle(params[0]?.axisValueLabel ?? '') + (rows.join('') || tipRow('no data', '', { muted: true }));
     };
   }
 
-  global.AIUsage = { THEME, build, register, init, refresh, colorFor, fmt, RANGES, bucketFor,
-                     bar, area, peak, nonEmpty, tooltipFormatter };
+  global.AIUsage = { THEME, build, register, init, refresh, colorFor, shade, fmt, RANGES, bucketFor,
+                     bar, peak, nonEmpty, tooltipFormatter, tipTitle, tipRow, esc };
 })(window);

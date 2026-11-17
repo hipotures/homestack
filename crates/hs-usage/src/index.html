@@ -1,266 +1,187 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="ai-usage-version" content="__HOMESTACK_USAGE_VERSION__"><meta name="viewport" content="width=device-width, initial-scale=1"><title>AI usage</title><link rel="icon" href="/assets/favicon.ico?v=__HOMESTACK_USAGE_VERSION__" sizes="any"><link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=__HOMESTACK_USAGE_VERSION__"><link rel="apple-touch-icon" href="/assets/favicon-180.png?v=__HOMESTACK_USAGE_VERSION__"><link rel="manifest" href="/assets/manifest.webmanifest?v=__HOMESTACK_USAGE_VERSION__"><link rel="stylesheet" href="/assets/design-system/ds.css?v=__HOMESTACK_USAGE_VERSION__"><link rel="stylesheet" href="/assets/aiusage-tokens.css?v=__HOMESTACK_USAGE_VERSION__"><link rel="stylesheet" href="/assets/aiusage-ds.css?v=__HOMESTACK_USAGE_VERSION__"><style>
-* { box-sizing: border-box; }
-body { font-variant-numeric: tabular-nums; overflow-x: hidden; }
-.row-2 { grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); }
-main { max-width: 1320px; margin: 0 auto; padding: 28px 16px 64px; display: flex; flex-direction: column; gap: var(--gap-section); }
-[hidden] { display: none !important; }
-h1 { font-size: 20px; margin: 0; font-weight: 600; letter-spacing: -.01em; }
-.top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; }
-.brand, .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; min-width: 0; }
-.live { display: inline-flex; align-items: center; gap: 8px; font-size: var(--fs-small); color: var(--muted); }
-.scope { max-width: 200px; }
-select option { background: var(--surface-3); color: var(--text); }
-.theme { cursor: pointer; }
-.range { position: relative; max-width: 100%; }
-.menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 5; width: 220px; padding: 6px; background: var(--surface-3); border: 1px solid var(--border-strong); border-radius: 12px; box-shadow: 0 12px 32px rgba(0,0,0,.35); display: flex; flex-direction: column; gap: 2px; }
-.menu [role=menuitem] { border: 0; text-align: left; min-height: 38px; padding: 0 12px; border-radius: 8px; background: transparent; color: var(--text); font: inherit; font-size: 13px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
-.menu [role=menuitem]:hover:not(:disabled), .menu [role=menuitem].active { background: var(--surface-2); }
-.menu [role=menuitem]:disabled { color: var(--faint); cursor: not-allowed; }
-.menu .hint { font-size: 11px; color: var(--faint); }
-.menu .custom { display: grid; gap: 6px; margin-top: 4px; padding: 8px 6px 2px; border-top: 1px solid var(--border); }
-.menu .custom label { display: grid; grid-template-columns: 40px 1fr; align-items: center; font-size: 12px; color: var(--muted); }
-.menu .custom .ds-input { font-size: 13px; }
-a { color: var(--tok-uncached); }
-.link { font: inherit; color: var(--tok-uncached); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; }
-.row-2, .kpi-grid { min-width: 0; }
-.row-2:not(:has(> :not([hidden]))), .row-3:not(:has(> :not([hidden]))) { display: none; }
-.row-3 { display: flex; flex-wrap: wrap; gap: var(--gap-grid); }
-.row-3 > .heat-card { flex: 999 1 640px; }
-.row-3 > .side { flex: 1 1 320px; }
-.card-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
-.card-top > div:first-child { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.card-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; min-width: 0; }
-.card .seg { background: var(--bg); }
-#model-pick { max-width: min(100%, 340px); }
-.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: var(--fs-small); color: var(--text-2); }
-.legend span, .swatch-label { display: inline-flex; align-items: center; gap: 6px; }
-.sw { width: 10px; height: 10px; border-radius: 3px; flex: none; }
-.chips { display: flex; flex-wrap: wrap; gap: 8px; }
-.chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 999px; background: var(--surface-2); color: var(--text-2); font-size: var(--fs-small); }
-.kpi { gap: 12px; }
-.kpi .figure, .metric .figure { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; }
-.kpi .legend-row, .bar-row .head { display: flex; justify-content: space-between; gap: 12px; font-size: var(--fs-small); color: var(--muted); }
-.kpi .stack { display: flex; flex-direction: column; gap: 6px; }
-.kpi-foot { margin-top: auto; display: flex; flex-direction: column; gap: 10px; }
-.kpi-chart { height: 40px; }
-.kpi-detail { min-height: 34px; display: flex; flex-direction: column; justify-content: flex-end; }
-.spark { width: 100%; height: 40px; display: block; }
-.hits { display: flex; gap: 2px; align-items: flex-end; height: 40px; }
-.hits span { flex: 1; border-radius: 1px; min-width: 1px; }
-.note { color: var(--muted); font-size: var(--fs-small); }
-.faint { color: var(--faint); }
-.bars { display: flex; flex-direction: column; gap: 14px; }
-.bar-row { display: flex; flex-direction: column; gap: 6px; }
-.bar-row .head { font-size: 13px; color: var(--text-2); }
-.bar-row .head .num { color: var(--text); }
-.track { height: 8px; border-radius: 4px; background: var(--track); overflow: hidden; display: flex; }
-.track > span { display: block; height: 100%; }
-.track.thick { height: 10px; border-radius: 5px; }
-.model { display: flex; flex-direction: column; gap: 8px; }
-.model .head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
-.model .name { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; min-width: 0; overflow-wrap: anywhere; }
-.model .cost { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 18px; font-weight: 600; }
-.model .meta { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: var(--fs-small); color: var(--muted); }
-.idle { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 13px; color: var(--muted); }
-.idle.first { padding-top: 14px; border-top: 1px solid var(--border); }
-.idle .sw { opacity: .45; }
-.more-tools summary { cursor: pointer; margin-bottom: 10px; }
-.heat-legend { display: flex; align-items: center; gap: 6px; font-size: var(--fs-tick); color: var(--faint); }
-.heat-legend i { width: 12px; height: 12px; border-radius: 3px; }
-.chart.heat { height: 250px; }
-.spikes { display: flex; flex-direction: column; gap: 10px; }
-.spike { display: flex; align-items: center; gap: 14px; padding: 12px 14px; border-radius: 12px; background: var(--surface-2); }
-.spike.top { background: var(--alert-bg); }
-.spike .factor { font-family: var(--font-mono); font-size: 15px; font-weight: 600; min-width: 64px; color: var(--warn); }
-.spike.top .factor { color: var(--claude-hi); }
-.spike div { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
-.spike div .num { font-size: var(--fs-small); color: var(--muted); }
-.agents-now { margin-top: auto; display: flex; flex-direction: column; gap: 8px; padding-top: 14px; border-top: 1px solid var(--border); }
-.agents-now div { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; }
-.foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; font-size: var(--fs-small); color: var(--faint); }
-.raw { display: flex; flex-direction: column; gap: var(--gap-grid); }
-.raw-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.raw-head h2 { margin: 0; font-size: var(--fs-h2); }
-.agents { display: flex; flex-direction: column; gap: var(--gap-grid); }
-.compare-rows { display: flex; flex-direction: column; }
-.compare-row { display: grid; grid-template-columns: minmax(110px, 180px) repeat(var(--agents, 2), minmax(0, 1fr)); gap: 20px; align-items: center; padding: 11px 0; border-top: 1px solid var(--border); font-size: 13px; }
-.compare-row > span:first-child { color: var(--text-2); }
-.compare-row .cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.compare-row .cell .track { flex: 1; height: 6px; }
-.compare-row .cell .num { min-width: 84px; text-align: right; }
-.compare-row .cell .num.missing { color: var(--faint); font-family: var(--font-sans); }
-.agent-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
-.tabs { display: inline-flex; gap: 4px; border-bottom: 1px solid var(--border-strong); max-width: 100%; overflow-x: auto; scrollbar-width: none; }
-.tabs button { border: 0; background: transparent; min-height: 44px; padding: 0 16px; font: inherit; font-size: 14px; color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
-.tabs button[aria-selected="true"] { color: var(--text); font-weight: 600; box-shadow: inset 0 -2px 0 var(--tab-color); }
-.tabs .count { font-size: 11px; color: var(--faint); font-weight: 400; }
-.agent-title { margin: 0; font-size: 18px; font-weight: 600; display: inline-flex; align-items: center; gap: 10px; }
-.agent-title i, .tabs i { width: 8px; height: 8px; border-radius: 50%; }
-.mini { display: flex; align-items: flex-end; gap: 2px; height: 40px; }
-.mini span { flex: 1; border-radius: 2px 2px 0 0; min-width: 1px; }
-.mini-axis { display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: 10px; color: var(--faint); }
-.metric .kpi-value { font-size: 34px; }
-.kpi-grid.metrics { grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); }
-.metric .figure .note { white-space: nowrap; }
-.work { display: grid; grid-template-columns: minmax(56px, auto) minmax(0, 1fr) 84px; gap: 12px; align-items: center; font-size: 13px; }
-.work .track { height: 14px; border-radius: 4px; }
-.work > span:first-child { color: var(--text-2); }
-.work > span:last-child, .tool > span:last-child { text-align: right; }
-.tool { display: grid; grid-template-columns: minmax(0, 170px) minmax(0, 1fr) 60px; gap: 12px; align-items: center; font-size: 12px; }
-.tool > span:first-child { font-family: var(--font-mono); color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tool .track { height: 10px; border-radius: 3px; }
-.empty { padding: 28px; gap: 22px; }
-.empty h3 { margin: 0; font-size: 16px; }
-.empty p { margin: 0; font-size: 13px; color: var(--text-2); }
-.placeholders { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 12px; }
-.placeholders div { border: 1px dashed var(--border-strong); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 8px; font-size: var(--fs-small); color: var(--faint); }
-.placeholders .num { font-size: 22px; color: var(--faint); }
-.agents h3 { margin: 0; font-size: var(--fs-h2); font-weight: 600; }
-.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: var(--gap-grid); }
-.cards .card { gap: 10px; }
-.card-head { display: flex; align-items: baseline; gap: 8px; }
-.card .unit { color: var(--muted); font-size: 12px; }
-.card .toggle { font: inherit; font-size: 12px; color: var(--text-2); background: none; border: none; cursor: pointer; text-decoration: underline; }
-.card-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
-.card .copy { font: inherit; font-size: 12px; color: var(--text-2); background: none; border: 1px solid var(--border-strong); border-radius: 4px; padding: 2px 6px; cursor: pointer; }
-.card .note { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.table-wrap { overflow-x: auto; max-height: 260px; overflow-y: auto; }
-table:not(.ds-table) { border-collapse: collapse; font-size: 12px; width: 100%; font-variant-numeric: tabular-nums; }
-:where(table:not(.ds-table)) :is(th, td) { text-align: right; padding: 3px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
-:where(table:not(.ds-table)) :is(th, td):first-child { text-align: left; }
-:where(table:not(.ds-table)) th { color: var(--text-2); font-weight: 600; position: sticky; top: 0; background: var(--surface); }
-button:not(.ds-btn, .ds-icon-btn, .ds-segmented button):focus-visible, select:not(.ds-select):focus-visible { outline: 2px solid var(--codex); outline-offset: 2px; }
-/* Phones: switches scroll sideways, grids collapse, the page never scrolls horizontally. */
-@media (max-width: 640px) {
-  .controls, .range { width: 100%; }
-  .controls .scope { flex: 1 1 140px; max-width: none; }
-  .card-tools { width: 100%; justify-content: space-between; }
-  .card .seg { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
-  .compare-row { grid-template-columns: repeat(var(--agents, 2), minmax(0, 1fr)); gap: 6px 14px; }
-  .compare-row > span:first-child { grid-column: 1 / -1; }
-  .compare-row .cell .num { min-width: 0; }
-  .tool { grid-template-columns: minmax(0, 110px) minmax(0, 1fr) 48px; }
-  .work { grid-template-columns: minmax(56px, auto) minmax(0, 1fr) 72px; }
-  .metric .kpi-value { font-size: 30px; }
-  .chart.tall { height: 260px; }
-}
-
-.limit-controls { display:flex;flex-wrap:wrap;gap:12px 24px;margin-top:12px; }
-.limit-controls label { display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted); }
-.limit-controls input { width:16px;height:16px;accent-color:var(--codex); }
-</style>
+<html lang="en" data-tm-theme="light"><head><meta charset="utf-8"><meta name="ai-usage-version" content="__HOMESTACK_USAGE_VERSION__"><meta name="viewport" content="width=device-width, initial-scale=1"><title>AI usage</title>
+<link rel="icon" href="/assets/favicon.ico?v=__HOMESTACK_USAGE_VERSION__" sizes="any"><link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png?v=__HOMESTACK_USAGE_VERSION__"><link rel="apple-touch-icon" href="/assets/favicon-180.png?v=__HOMESTACK_USAGE_VERSION__"><link rel="manifest" href="/assets/manifest.webmanifest?v=__HOMESTACK_USAGE_VERSION__">
+<script>
+// Apply the saved theme before first paint. "tm-theme" holds light/dark/coffee.
+(function () {
+  var t = null;
+  try { t = localStorage.getItem('tm-theme'); } catch (e) {}
+  if (t !== 'light' && t !== 'dark' && t !== 'coffee') t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-tm-theme', t);
+})();
+</script>
+<link rel="stylesheet" href="/assets/the-mechanics/fonts.css?v=__HOMESTACK_USAGE_VERSION__">
+<link rel="stylesheet" href="/assets/the-mechanics/the-mechanics.css?v=__HOMESTACK_USAGE_VERSION__">
+<link rel="stylesheet" href="/assets/aiusage.css?v=__HOMESTACK_USAGE_VERSION__">
 <script defer src="/assets/echarts-6.1.0.min.js?v=__HOMESTACK_USAGE_VERSION__"></script>
 <script defer src="/assets/aiusage-echarts-theme.js?v=__HOMESTACK_USAGE_VERSION__"></script>
 <script defer src="/assets/dashboard.js?v=__HOMESTACK_USAGE_VERSION__"></script>
 <script type="module" src="/assets/datastar-1.0.4.js?v=__HOMESTACK_USAGE_VERSION__"></script>
-</head><body>
-<main data-signals="window.usage.initial()"
+</head><body class="tm-root">
+<main class="aiu-main" data-signals="window.usage.initial()"
  data-init="window.usage.restore(el)"
  data-effect="@get('/api/dashboard/events', {payload:{agent:$agent,host:$host,project:$project,range:$range,epoch:window.usage.select({agent:$agent,host:$host,project:$project,range:$range},$_sync)},openWhenHidden:true,retry:'always',retryMaxCount:1000,retryInterval:3000})">
-<header class="top">
-<div class="brand"><h1>AI usage</h1><span class="live" id="updated" aria-live="polite"><span class="ds-status-dot" id="updated-dot" data-status="running" aria-hidden="true"></span><span id="updated-text">connecting…</span></span></div>
-<div class="controls">
-<div class="range" data-on:click__outside="$_more=false" data-on:keydown__window="evt.key==='Escape'&&($_more=false)">
-<div class="ds-segmented" role="group" aria-label="Time range">
-<button type="button" data-on:click="$range='1h'" data-attr:aria-pressed="String($range==='1h')">1h</button>
-<button type="button" data-on:click="$range='24h'" data-attr:aria-pressed="String($range==='24h')">24h</button>
-<button type="button" data-on:click="$range='7d'" data-attr:aria-pressed="String($range==='7d')">7d</button>
-<button type="button" data-on:click="$range='30d'" data-attr:aria-pressed="String($range==='30d')">30d</button>
-<button type="button" id="range-90d" data-on:click="$range='90d'" data-attr:aria-pressed="String($range==='90d')">90d</button>
-<button type="button" id="range-more" aria-haspopup="menu" data-on:click="$_more=!$_more" data-attr:aria-expanded="String($_more)" data-attr:aria-pressed="String(!['1h','24h','7d','30d','90d'].includes($range))" data-text="window.usage.rangeLabel($range)+' ▾'">More ▾</button>
+<header class="tm-page-head aiu-head">
+<div class="tm-page-head__text">
+<h1 class="tm-page-title">AI usage</h1>
+<p class="aiu-live" id="updated" aria-live="polite"><span class="tm-mark" id="updated-mark" data-state="pending" aria-hidden="true"></span><span id="updated-text">connecting…</span></p>
 </div>
-<div class="menu" role="menu" data-show="$_more" style="display:none">
-<button type="button" role="menuitem" data-on:click="$range='180d';$_more=false" data-class:active="$range==='180d'">180 days</button>
-<button type="button" role="menuitem" data-on:click="$range='1y';$_more=false" data-class:active="$range==='1y'">1 year</button>
-<button type="button" role="menuitem" data-on:click="$range='all';$_more=false" data-class:active="$range==='all'">All <span class="hint">retained history</span></button>
-<div class="custom" role="group" aria-label="Custom range"><span class="hint">Custom range · local days</span>
-<label>From <input type="date" class="ds-input" id="range-from" data-bind:_from></label>
-<label>To <input type="date" class="ds-input" id="range-to" data-bind:_to></label>
-<button type="button" class="ds-btn ds-btn-primary ds-btn-compact" data-attr:disabled="!window.usage.custom($_from,$_to)" data-on:click="$range=window.usage.custom($_from,$_to)||$range;$_more=false">Apply</button></div>
+<div class="aiu-controls" role="group" aria-label="Dashboard filters">
+<div class="aiu-range" data-on:click__outside="$_more=false" data-on:keydown__window="evt.key==='Escape'&&($_more=false)">
+<div class="tm-segmented" role="group" aria-label="Time range">
+<button type="button" class="tm-segmented__option" data-on:click="$range='1h'" data-attr:aria-pressed="String($range==='1h')">1h</button>
+<button type="button" class="tm-segmented__option" data-on:click="$range='24h'" data-attr:aria-pressed="String($range==='24h')">24h</button>
+<button type="button" class="tm-segmented__option" data-on:click="$range='7d'" data-attr:aria-pressed="String($range==='7d')">7d</button>
+<button type="button" class="tm-segmented__option" data-on:click="$range='30d'" data-attr:aria-pressed="String($range==='30d')">30d</button>
+<button type="button" class="tm-segmented__option" id="range-90d" data-on:click="$range='90d'" data-attr:aria-pressed="String($range==='90d')">90d</button>
+<button type="button" class="tm-segmented__option aiu-more" id="range-more" aria-haspopup="menu" data-on:click="$_more=!$_more" data-attr:aria-expanded="String($_more)" data-attr:aria-pressed="String(!['1h','24h','7d','30d','90d'].includes($range))"><span data-text="window.usage.rangeLabel($range)">More</span><svg class="tm-icon tm-icon--sm" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg></button>
+</div>
+<div class="tm-menu aiu-menu" role="menu" aria-label="More ranges" data-show="$_more" style="display:none">
+<button type="button" class="tm-menu__item" role="menuitem" data-on:click="$range='180d';$_more=false" data-attr:aria-current="String($range==='180d')">180 days</button>
+<button type="button" class="tm-menu__item" role="menuitem" data-on:click="$range='1y';$_more=false" data-attr:aria-current="String($range==='1y')">1 year</button>
+<button type="button" class="tm-menu__item" role="menuitem" data-on:click="$range='all';$_more=false" data-attr:aria-current="String($range==='all')">All <span class="tm-meta">retained history</span></button>
+<div class="aiu-custom" role="group" aria-label="Custom range"><div class="tm-menu__label">Custom range · local days</div>
+<div class="tm-field"><label class="tm-field__label" for="range-from">From</label><input type="date" class="tm-input" id="range-from" data-bind:_from></div>
+<div class="tm-field"><label class="tm-field__label" for="range-to">To</label><input type="date" class="tm-input" id="range-to" data-bind:_to></div>
+<button type="button" class="tm-btn tm-btn--primary tm-btn--sm" data-attr:disabled="!window.usage.custom($_from,$_to)" data-on:click="$range=window.usage.custom($_from,$_to)||$range;$_more=false">Apply</button></div>
 </div>
 </div>
-<select class="ds-select scope" id="agent" aria-label="Agent" data-bind:agent><option value="all">Agents: all</option><option value="claude">Claude Code</option><option value="codex">Codex</option><option value="antigravity">Antigravity</option></select>
-<select class="ds-select scope" id="host" aria-label="Server" data-bind:host><option value="*">Servers: all</option></select>
-<select class="ds-select scope" id="project" aria-label="Project" data-bind:project><option value="*">Projects: all</option></select>
-<button class="ds-btn scope theme" id="theme" type="button">Theme</button>
+<select class="tm-select aiu-scope" id="agent" aria-label="Agent" data-bind:agent><option value="all">Agents: all</option><option value="claude">Claude Code</option><option value="codex">Codex</option><option value="antigravity">Antigravity</option></select>
+<select class="tm-select aiu-scope" id="host" aria-label="Server" data-bind:host><option value="*">Servers: all</option></select>
+<select class="tm-select aiu-scope" id="project" aria-label="Project" data-bind:project><option value="*">Projects: all</option></select>
+<span class="tm-tip tm-tip--below aiu-tip-end"><button id="theme" class="tm-btn tm-btn--ghost tm-btn--icon" type="button"><svg class="tm-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path id="theme-icon" d=""/></svg></button><span class="tm-tip__bubble" id="theme-tip" aria-hidden="true"></span></span>
 </div></header>
 <div hidden data-effect="if($_packet) window.usage.apply(JSON.parse($_packet))"></div>
 <button id="resync" type="button" hidden data-on:click="$_sync++">Resynchronize</button>
-<div class="ds-notice" data-tone="danger" id="error" role="status" hidden></div>
-<div class="overview" id="overview" data-ignore-morph style="display:contents">
-<section class="kpi-grid" id="kpis" aria-label="Summary"></section>
-<section class="card" id="trend" aria-label="Usage over time">
-<div class="card-top"><div><h2 id="trend-title">Cost over time</h2><span class="sub" id="trend-sub"></span></div>
-<div class="card-tools"><div class="legend" id="trend-legend"></div>
-<div class="seg" role="group" aria-label="Metric"><button type="button" data-metric="cost">Cost</button><button type="button" data-metric="tokens">Tokens</button><button type="button" data-metric="types">Token types</button></div></div></div>
-<div class="chips" id="trend-chips"></div>
-<div class="chart tall" id="trend-chart" role="img" aria-label="Usage over time, stacked by model"></div>
-<div class="limit-controls"><label><input type="checkbox" id="limit-events"> Limit exhaustion markers</label><label><input type="checkbox" id="limit-periods"> Quota windows and resets</label></div>
-</section>
-<section class="card" id="share" aria-label="Claude Code versus Codex" hidden>
-<div class="card-top"><div><h2><span style="color:var(--claude)">Claude Code</span> vs <span style="color:var(--codex)">Codex</span></h2><span class="sub" id="share-sub"></span></div>
-<div class="seg" role="group" aria-label="Share metric"><button type="button" data-share-metric="cost">Cost</button><button type="button" data-share-metric="tokens">Tokens</button></div></div>
-<div class="legend" id="share-totals"></div>
-<div class="note" id="share-note"></div>
-<div class="chart tall" id="share-chart" role="img" aria-label="Claude Code share over time; 50% is an even split with Codex"></div>
-</section>
-<section class="card" id="scopes" aria-label="Usage by server or project" hidden>
-<div class="card-top"><div><h2 id="scopes-title">Cost by project</h2><span class="sub" id="scopes-sub"></span></div>
-<div class="card-tools"><div class="seg" role="group" aria-label="Breakdown" id="scopes-by"><button type="button" data-scope-by="project">Projects</button><button type="button" data-scope-by="host">Servers</button></div></div></div>
-<div class="chips" id="scopes-chips"></div>
-<div class="chart tall" id="scopes-chart" role="img" aria-label="Usage over time, stacked by server or project"></div>
-</section>
-<div class="row-2"><section class="card" id="composition" aria-label="Token composition"></section><section class="card" id="models" aria-label="Cost by model"></section></div>
-<div class="row-2">
-<section class="ds-panel" id="model-tokens" aria-label="Token breakdown of one model over time" hidden>
-<div class="ds-panel-head"><div class="panel-heading"><h2 class="ds-panel-title">Model tokens over time</h2><span class="sub" id="model-tokens-sub"></span></div>
-<div class="card-tools"><select class="ds-select" id="model-pick" aria-label="Model"></select><span class="card-actions"><button class="ds-icon-btn copy" type="button" hidden title="Copy data as JSON" aria-label="Copy data as JSON">⧉</button><button class="ds-btn ds-btn-ghost ds-btn-compact toggle" type="button">table</button></span></div></div>
-<div class="ds-panel-body">
-<div class="chips" id="model-tokens-chips"></div>
-<div class="chart" id="model-tokens-chart" role="img" aria-label="Token categories of the selected model, stacked per bucket"></div>
-<div class="table-wrap" hidden tabindex="0" role="region" aria-label="Model tokens data"></div>
+<div class="aiu-overview" id="overview" data-ignore-morph>
+<section class="tm-kpi-strip aiu-kpis" id="kpis" aria-label="Summary for the selected range"></section>
+
+<section class="tm-region" id="usage-region" aria-labelledby="usage-title">
+<header class="tm-region__head"><h2 class="tm-region__title" id="usage-title">Usage over time</h2></header>
+<div class="tm-panel-grid aiu-grid" data-cols="1">
+<article class="tm-panel" id="trend" aria-labelledby="trend-title">
+<header class="tm-panel__head tm-panel__head--rich">
+<div class="tm-panel__heading"><h3 class="tm-panel__title" id="trend-title">Cost over time</h3><span class="tm-panel__subtitle" id="trend-sub"></span></div>
+<div class="tm-panel__actions"><ul class="tm-legend" id="trend-legend" aria-label="Series"></ul>
+<div class="tm-segmented tm-segmented--sm" role="group" aria-label="Metric"><button type="button" class="tm-segmented__option" data-metric="cost">Cost</button><button type="button" class="tm-segmented__option" data-metric="tokens">Tokens</button><button type="button" class="tm-segmented__option" data-metric="types">Token types</button></div></div>
+</header>
+<div class="tm-panel__body">
+<div class="tm-chart-readout aiu-readout" id="trend-chips" aria-live="polite"></div>
+<div class="tm-chart aiu-chart aiu-chart--tall" id="trend-chart" role="img" aria-label="Usage over time, stacked by model"></div>
+<div class="tm-chart-options">
+<label class="tm-choice"><input class="tm-check" type="checkbox" id="limit-events"><span class="tm-choice__label">Limit exhaustion markers</span></label>
+<label class="tm-choice"><input class="tm-check" type="checkbox" id="limit-periods"><span class="tm-choice__label">Quota windows and resets</span></label>
+</div>
+</div>
+</article>
+<article class="tm-panel" id="share" aria-labelledby="share-title" hidden>
+<header class="tm-panel__head tm-panel__head--rich">
+<div class="tm-panel__heading"><h3 class="tm-panel__title" id="share-title"><span class="aiu-agent-name" data-agent="claude">Claude Code</span>&nbsp;vs&nbsp;<span class="aiu-agent-name" data-agent="codex">Codex</span></h3><span class="tm-panel__subtitle" id="share-sub"></span></div>
+<div class="tm-panel__actions"><div class="tm-segmented tm-segmented--sm" role="group" aria-label="Share metric"><button type="button" class="tm-segmented__option" data-share-metric="cost">Cost</button><button type="button" class="tm-segmented__option" data-share-metric="tokens">Tokens</button></div></div>
+</header>
+<div class="tm-panel__body">
+<ul class="tm-legend aiu-totals" id="share-totals"></ul>
+<p class="tm-meta aiu-note" id="share-note"></p>
+<div class="tm-chart aiu-chart aiu-chart--tall" id="share-chart" role="img" aria-label="Claude Code share over time; 50% is an even split with Codex"></div>
+</div>
+</article>
+<article class="tm-panel" id="scopes" aria-labelledby="scopes-title" hidden>
+<header class="tm-panel__head tm-panel__head--rich">
+<div class="tm-panel__heading"><h3 class="tm-panel__title" id="scopes-title">Cost by project</h3><span class="tm-panel__subtitle" id="scopes-sub"></span></div>
+<div class="tm-panel__actions"><div class="tm-segmented tm-segmented--sm" role="group" aria-label="Breakdown" id="scopes-by"><button type="button" class="tm-segmented__option" data-scope-by="project">Projects</button><button type="button" class="tm-segmented__option" data-scope-by="host">Servers</button></div></div>
+</header>
+<div class="tm-panel__body">
+<div class="tm-chart-readout aiu-readout" id="scopes-chips"></div>
+<div class="tm-chart aiu-chart aiu-chart--tall" id="scopes-chart" role="img" aria-label="Usage over time, stacked by server or project"></div>
+</div>
+</article>
 </div>
 </section>
-<section class="ds-panel" id="model-hit" aria-label="Cache hit by model over time" hidden>
-<div class="ds-panel-head"><div class="panel-heading"><h2 class="ds-panel-title">Cache hit by model</h2><span class="sub" id="model-hit-sub"></span></div>
-<div class="card-tools"><span class="card-actions"><button class="ds-icon-btn copy" type="button" hidden title="Copy data as JSON" aria-label="Copy data as JSON">⧉</button><button class="ds-btn ds-btn-ghost ds-btn-compact toggle" type="button">table</button></span></div></div>
-<div class="ds-panel-body">
-<div class="chips" id="model-hit-chips"></div>
-<div class="chart" id="model-hit-chart" role="img" aria-label="Cache hit rate per model and bucket"></div>
-<div class="table-wrap" hidden tabindex="0" role="region" aria-label="Cache hit data"></div>
+
+<section class="tm-region" id="models-region" aria-labelledby="models-title">
+<header class="tm-region__head"><h2 class="tm-region__title" id="models-title">Tokens and models</h2></header>
+<div class="tm-panel-grid aiu-grid" data-cols="2">
+<article class="tm-panel" id="composition" aria-label="Token composition"></article>
+<article class="tm-panel" id="models" aria-label="Cost by model"></article>
+<article class="tm-panel aiu-view" id="model-tokens" aria-labelledby="model-tokens-title" hidden>
+<header class="tm-panel__head tm-panel__head--rich">
+<div class="tm-panel__heading"><h3 class="tm-panel__title" id="model-tokens-title">Model tokens over time</h3><span class="tm-panel__subtitle" id="model-tokens-sub"></span></div>
+<div class="tm-panel__actions"><select class="tm-select" id="model-pick" aria-label="Model"></select><span class="aiu-view-tools"><button class="tm-btn tm-btn--ghost tm-btn--icon tm-btn--sm copy" type="button" hidden aria-label="Copy data as JSON"><svg class="tm-icon tm-icon--sm" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 5.5h8v8h-8zM2.5 10.5v-8h8"/></svg></button><button class="tm-btn tm-btn--outline tm-btn--sm tm-btn--toggle toggle" type="button" aria-pressed="false">Table</button></span></div>
+</header>
+<div class="tm-panel__body">
+<div class="tm-chart-readout aiu-readout" id="model-tokens-chips"></div>
+<div class="tm-chart aiu-chart" id="model-tokens-chart" role="img" aria-label="Token categories of the selected model, stacked per bucket"></div>
+<div class="tm-table-wrap aiu-table" hidden tabindex="0" role="region" aria-label="Model tokens data"></div>
+</div>
+</article>
+<article class="tm-panel aiu-view" id="model-hit" aria-labelledby="model-hit-title" hidden>
+<header class="tm-panel__head tm-panel__head--rich">
+<div class="tm-panel__heading"><h3 class="tm-panel__title" id="model-hit-title">Cache hit by model</h3><span class="tm-panel__subtitle" id="model-hit-sub"></span></div>
+<div class="tm-panel__actions"><span class="aiu-view-tools"><button class="tm-btn tm-btn--ghost tm-btn--icon tm-btn--sm copy" type="button" hidden aria-label="Copy data as JSON"><svg class="tm-icon tm-icon--sm" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 5.5h8v8h-8zM2.5 10.5v-8h8"/></svg></button><button class="tm-btn tm-btn--outline tm-btn--sm tm-btn--toggle toggle" type="button" aria-pressed="false">Table</button></span></div>
+</header>
+<div class="tm-panel__body">
+<div class="tm-chart-readout aiu-readout" id="model-hit-chips"></div>
+<div class="tm-chart aiu-chart" id="model-hit-chart" role="img" aria-label="Cache hit rate per model and bucket"></div>
+<div class="tm-table-wrap aiu-table" hidden tabindex="0" role="region" aria-label="Cache hit data"></div>
+</div>
+</article>
+<article class="tm-panel aiu-view" id="model-effort" aria-labelledby="model-effort-title" hidden>
+<header class="tm-panel__head tm-panel__head--rich">
+<div class="tm-panel__heading"><h3 class="tm-panel__title" id="model-effort-title">Tokens by effort</h3><span class="tm-panel__subtitle" id="model-effort-sub"></span></div>
+<div class="tm-panel__actions"><span class="aiu-view-tools"><button class="tm-btn tm-btn--ghost tm-btn--icon tm-btn--sm copy" type="button" hidden aria-label="Copy data as JSON"><svg class="tm-icon tm-icon--sm" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 5.5h8v8h-8zM2.5 10.5v-8h8"/></svg></button><button class="tm-btn tm-btn--outline tm-btn--sm tm-btn--toggle toggle" type="button" aria-pressed="false">Table</button></span></div>
+</header>
+<div class="tm-panel__body">
+<div class="tm-chart-readout aiu-readout" id="model-effort-chips"></div>
+<div class="tm-chart aiu-chart" id="model-effort-chart" role="img" aria-label="Tokens per reasoning effort level, stacked per bucket"></div>
+<div class="tm-table-wrap aiu-table" hidden tabindex="0" role="region" aria-label="Tokens by effort data"></div>
+</div>
+</article>
 </div>
 </section>
+
+<section class="tm-region" id="activity-region" aria-labelledby="activity-title">
+<header class="tm-region__head"><h2 class="tm-region__title" id="activity-title">Activity</h2></header>
+<div class="tm-panel-grid aiu-grid aiu-grid--activity">
+<article class="tm-panel" id="hours" aria-labelledby="hours-title">
+<header class="tm-panel__head tm-panel__head--rich">
+<div class="tm-panel__heading"><h3 class="tm-panel__title" id="hours-title">When you work</h3><span class="tm-panel__subtitle" id="hours-sub">estimated active hours · selected range</span></div>
+<div class="tm-panel__actions"><span class="aiu-figure" id="hours-total"></span></div>
+</header>
+<div class="tm-panel__body">
+<ul class="tm-legend" id="hours-legend" aria-label="Agents"></ul>
+<p class="tm-meta aiu-note" id="hours-empty" hidden></p>
+<div class="tm-chart aiu-chart" id="hours-chart" role="img" aria-label="Estimated active hours over time by agent"></div>
+<p class="tm-meta aiu-note">Estimated from 5-minute windows with token usage. Overlapping sessions count once; overall time also merges agents. Includes autonomous work, excludes idle gaps and the current unfinished window. Missing telemetry cannot be reconstructed.</p>
 </div>
-<section class="ds-panel" id="model-effort" aria-label="Tokens by reasoning effort over time" hidden>
-<div class="ds-panel-head"><div class="panel-heading"><h2 class="ds-panel-title">Tokens by effort</h2><span class="sub" id="model-effort-sub"></span></div>
-<div class="card-tools"><span class="card-actions"><button class="ds-icon-btn copy" type="button" hidden title="Copy data as JSON" aria-label="Copy data as JSON">⧉</button><button class="ds-btn ds-btn-ghost ds-btn-compact toggle" type="button">table</button></span></div></div>
-<div class="ds-panel-body">
-<div class="chips" id="model-effort-chips"></div>
-<div class="chart" id="model-effort-chart" role="img" aria-label="Tokens per reasoning effort level, stacked per bucket"></div>
-<div class="table-wrap" hidden tabindex="0" role="region" aria-label="Tokens by effort data"></div>
+</article>
+<article class="tm-panel" id="heat-detail" aria-labelledby="heat-title">
+<header class="tm-panel__head tm-panel__head--rich">
+<div class="tm-panel__heading"><h3 class="tm-panel__title" id="heat-title">Token activity</h3><span class="tm-panel__subtitle" id="heat-sub">tokens by weekday and hour · local time</span></div>
+<div class="tm-panel__actions"><span class="aiu-heat-legend" aria-hidden="true">less <i style="background:var(--tm-heat-lo)"></i><i style="background:color-mix(in srgb,var(--tm-heat-hi) 35%,var(--tm-heat-lo))"></i><i style="background:color-mix(in srgb,var(--tm-heat-hi) 70%,var(--tm-heat-lo))"></i><i style="background:var(--tm-heat-hi)"></i> more</span></div>
+</header>
+<div class="tm-panel__body"><div class="tm-chart aiu-chart aiu-chart--heat" id="heat-chart" role="img" aria-label="Tokens by local weekday and hour"></div></div>
+</article>
+<article class="tm-panel" id="spikes" aria-label="Usage spikes"></article>
 </div>
 </section>
-<div class="row-3">
-<section class="card heat-card" aria-label="Estimated active hours and token activity">
-<div class="card-top"><div><h2>When you work</h2><span class="sub" id="hours-sub">estimated active hours · selected range</span></div><span class="kpi-value" id="hours-total"></span></div>
-<div class="legend" id="hours-legend"></div>
-<div class="note" id="hours-empty" hidden></div>
-<div class="chart" id="hours-chart" role="img" aria-label="Estimated active hours over time by agent"></div>
-<div class="note">Estimated from 5-minute windows with token usage. Overlapping sessions count once; overall time also merges agents. Includes autonomous work, excludes idle gaps and the current unfinished window. Missing telemetry cannot be reconstructed.</div>
-<div id="heat-detail">
-<div class="card-top"><div><h3>Token activity</h3><span class="sub" id="heat-sub">tokens by weekday and hour · local time</span></div>
-<div class="heat-legend" aria-hidden="true">less <i style="background:var(--heat-empty)"></i><i style="background:color-mix(in srgb,var(--heat) 30%,var(--heat-empty))"></i><i style="background:color-mix(in srgb,var(--heat) 65%,var(--heat-empty))"></i><i style="background:var(--heat)"></i> more</div></div>
-<div class="chart heat" id="heat-chart" role="img" aria-label="Tokens by local weekday and hour"></div>
-</div>
+
+<section class="tm-region" id="compare-region" aria-labelledby="compare-title" hidden>
+<header class="tm-region__head"><h2 class="tm-region__title" id="compare-title">Comparison · shared metrics</h2><ul class="tm-legend" id="compare-legend" aria-label="Agents"></ul></header>
+<div class="aiu-compare" id="compare"></div>
 </section>
-<section class="card side" id="spikes" aria-label="Usage spikes"></section>
-</div>
-<section class="agents" id="agents" aria-label="Agent details"></section>
-</div>
-<footer class="foot"><span>AI Usage __HOMESTACK_USAGE_VERSION__ · Datastar 1.0.4 · Apache ECharts 6.1.0</span><span><a href="/assets/datastar-LICENSE.md">Datastar license</a> · <a href="/assets/echarts-LICENSE.txt">ECharts license</a> · <a href="/assets/echarts-NOTICE.txt">Notices</a> · <button class="link" id="export-all" type="button" title="Download the data of every chart as a JSON file, with shared queries stored once and chart time boundaries">Export all data</button> · <button class="link" id="raw-toggle" type="button" aria-controls="raw" aria-expanded="false">Show raw charts</button></span></footer>
-<section class="raw" id="raw" aria-label="Raw charts" hidden data-ignore-morph>
-<div class="raw-head"><h2>Raw charts</h2></div>
-<div class="cards" id="cards" data-ignore></div>
+
+<section class="tm-region" id="agent-region" aria-labelledby="agent-title">
+<header class="tm-region__head aiu-agent-head"><h2 class="tm-region__title" id="agent-title">Agent metrics</h2><span class="tm-panel__meta" id="agent-meta"></span></header>
+<div id="agents"></div>
 </section>
-</main></body></html>
+</div>
+
+<details class="tm-collapsible aiu-raw" id="raw" data-ignore-morph>
+<summary><span class="tm-collapsible__title">Raw charts</span><span class="tm-badge tm-badge--count" id="raw-count">0</span><span class="tm-collapsible__desc">every measurement as its own chart, with a data table</span></summary>
+<div class="tm-collapsible__body"><div class="tm-panel-grid aiu-grid aiu-raw-grid" data-cols="2" id="cards" data-ignore></div></div>
+</details>
+
+<footer class="aiu-foot tm-meta"><span>AI Usage __HOMESTACK_USAGE_VERSION__ · Datastar 1.0.4 · Apache ECharts 6.1.0 · The Mechanics 0.1.2</span><span class="aiu-foot__links"><a href="/assets/datastar-LICENSE.md">Datastar license</a><a href="/assets/echarts-LICENSE.txt">ECharts license</a><a href="/assets/echarts-NOTICE.txt">Notices</a><span class="tm-tip aiu-tip-end"><button class="tm-btn tm-btn--ghost tm-btn--sm" id="export-all" type="button">Export all data</button><span class="tm-tip__bubble" aria-hidden="true">Download the data of every chart as a JSON file, with shared queries stored once and chart time boundaries</span></span></span></footer>
+</main>
+<div class="tm-toast-region" id="toasts" aria-live="polite"></div>
+</body></html>

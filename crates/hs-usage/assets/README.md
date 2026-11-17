@@ -11,16 +11,16 @@ update `vendor.json`, asset route, HTML and documentation, and regenerate gzip
 with Python `gzip.compress(data, mtime=0)`. No Node runtime or frontend build
 step is required in the Alpine image. `dashboard.js` is the local presentation
 bridge; it contains no PromQL, pricing or telemetry accounting.
-`aiusage-tokens.css` holds the design tokens (dark and light) and
-`aiusage-echarts-theme.js` builds the ECharts theme and series colors from
-those tokens, so colors are defined in one place.
-
-`design-system/` is the shared Intelitex design system v0.2.0 (plain CSS, CC0),
-a pinned `git subtree`. Never edit it here. `main.rs` embeds its five files
-and serves them at `/assets/design-system/`. `aiusage-ds.css` maps its colors
-to the AI Usage tokens and holds the AI Usage layout around its primitives.
-The pin, update procedure, migrated elements and workarounds are in
-[docs/ai-usage-design-system.md](../../../docs/ai-usage-design-system.md).
+The UI uses The Mechanics (CSS-only, MIT) from the repository-wide
+`vendor/the-mechanics/`, shared with Agent Accounts. Never edit it there;
+update it with the upstream installer, which writes that directory and records
+the version in `.the-mechanics-version`. `main.rs` embeds the stylesheet,
+`fonts.css` and the IBM Plex fonts and serves them at
+`/assets/the-mechanics/`. `aiusage.css` holds the AI Usage colors (agent and
+model identity hues, token kinds from the chart palette) and the page layout
+around The Mechanics components; `aiusage-echarts-theme.js` builds the ECharts
+theme and series colors from those tokens, so colors are defined in one place.
+Design rules for changes are in `.claude/skills/the-mechanics/`.
 
 Upstream references: [Datastar actions](https://data-star.dev/reference/actions),
 [SSE protocol](https://data-star.dev/reference/sse_events),

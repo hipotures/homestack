@@ -124,13 +124,13 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             get(|| async {
                 (
                     [(header::CONTENT_TYPE, "text/css")],
-                    include_str!("../assets/the-mechanics/the-mechanics.css"),
+                    include_str!("../../../vendor/the-mechanics/the-mechanics.css"),
                 )
             }),
         )
         .route(
             "/vendor/the-mechanics/fonts.css",
-            get(|| async { ([(header::CONTENT_TYPE, "text/css")], include_str!("../assets/the-mechanics/fonts.css")) }),
+            get(|| async { ([(header::CONTENT_TYPE, "text/css")], include_str!("../../../vendor/the-mechanics/fonts.css")) }),
         )
         .route("/vendor/the-mechanics/fonts/{name}", get(font))
         .route(
@@ -269,7 +269,7 @@ async fn font(Path(name): Path<String>) -> Response {
     macro_rules! fonts {
         ($($file:literal),* $(,)?) => {
             match name.as_str() {
-                $($file => include_bytes!(concat!("../assets/the-mechanics/fonts/", $file)).as_slice(),)*
+                $($file => include_bytes!(concat!("../../../vendor/the-mechanics/fonts/", $file)).as_slice(),)*
                 _ => return StatusCode::NOT_FOUND.into_response(),
             }
         };

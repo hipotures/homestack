@@ -93,7 +93,8 @@ async fn main() -> ExitCode {
     let app = Router::new()
         .route("/", get(index))
         .route("/assets/{name}", get(asset))
-        .route("/assets/design-system/{name}", get(design_system_asset))
+        .route("/assets/the-mechanics/{name}", get(the_mechanics_asset))
+        .route("/assets/the-mechanics/fonts/{name}", get(the_mechanics_font))
         .route("/api/dashboard/events", get(live::events))
         .route("/api/dashboard/snapshot", get(live::snapshot))
         .route("/api/dashboard/export", get(live::export))
@@ -250,8 +251,7 @@ async fn asset(Path(name): Path<String>, headers: HeaderMap) -> Response {
         "favicon-512.png" => (include_bytes!("../assets/favicon-512.png"), &[]),
         "manifest.webmanifest" => (include_bytes!("../assets/manifest.webmanifest"), &[]),
         "aiusage-echarts-theme.js" => (include_bytes!("../assets/aiusage-echarts-theme.js"), &[]),
-        "aiusage-tokens.css" => (include_bytes!("../assets/aiusage-tokens.css"), &[]),
-        "aiusage-ds.css" => (include_bytes!("../assets/aiusage-ds.css"), &[]),
+        "aiusage.css" => (include_bytes!("../assets/aiusage.css"), &[]),
         "datastar-LICENSE.md" => (include_bytes!("../assets/datastar-LICENSE.md"), &[]),
         "echarts-LICENSE.txt" => (include_bytes!("../assets/echarts-LICENSE.txt"), &[]),
         "echarts-NOTICE.txt" => (include_bytes!("../assets/echarts-NOTICE.txt"), &[]),
@@ -260,17 +260,44 @@ async fn asset(Path(name): Path<String>, headers: HeaderMap) -> Response {
     serve(&name, plain, compressed, &headers)
 }
 
-/// The shared design system (a pinned `git subtree`, see `assets/README.md`). `ds.css` is the
-/// entry point; the browser resolves its relative `@import`s to the other files of this route.
-async fn design_system_asset(Path(name): Path<String>, headers: HeaderMap) -> Response {
+/// The Mechanics design system (`vendor/the-mechanics`, shared with Agent Accounts). `fonts.css` resolves
+/// its `./fonts/` URLs to the font route below.
+async fn the_mechanics_asset(Path(name): Path<String>, headers: HeaderMap) -> Response {
     let plain: &'static [u8] = match name.as_str() {
-        "ds.css" => include_bytes!("../assets/design-system/ds.css"),
-        "tokens.css" => include_bytes!("../assets/design-system/tokens.css"),
-        "themes.css" => include_bytes!("../assets/design-system/themes.css"),
-        "components.css" => include_bytes!("../assets/design-system/components.css"),
-        "state.css" => include_bytes!("../assets/design-system/state.css"),
+        "the-mechanics.css" => include_bytes!("../../../vendor/the-mechanics/the-mechanics.css"),
+        "fonts.css" => include_bytes!("../../../vendor/the-mechanics/fonts.css"),
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
+    serve(&name, plain, &[], &headers)
+}
+
+async fn the_mechanics_font(Path(name): Path<String>, headers: HeaderMap) -> Response {
+    macro_rules! fonts {
+        ($($file:literal),* $(,)?) => {
+            match name.as_str() {
+                $($file => include_bytes!(concat!("../../../vendor/the-mechanics/fonts/", $file)).as_slice(),)*
+                _ => return StatusCode::NOT_FOUND.into_response(),
+            }
+        };
+    }
+    let plain = fonts![
+        "ibm-plex-mono-latin-400-normal.woff2",
+        "ibm-plex-mono-latin-500-normal.woff2",
+        "ibm-plex-mono-latin-600-normal.woff2",
+        "ibm-plex-mono-latin-700-normal.woff2",
+        "ibm-plex-mono-latin-ext-400-normal.woff2",
+        "ibm-plex-mono-latin-ext-500-normal.woff2",
+        "ibm-plex-mono-latin-ext-600-normal.woff2",
+        "ibm-plex-mono-latin-ext-700-normal.woff2",
+        "ibm-plex-sans-latin-400-normal.woff2",
+        "ibm-plex-sans-latin-500-normal.woff2",
+        "ibm-plex-sans-latin-600-normal.woff2",
+        "ibm-plex-sans-latin-700-normal.woff2",
+        "ibm-plex-sans-latin-ext-400-normal.woff2",
+        "ibm-plex-sans-latin-ext-500-normal.woff2",
+        "ibm-plex-sans-latin-ext-600-normal.woff2",
+        "ibm-plex-sans-latin-ext-700-normal.woff2",
+    ];
     serve(&name, plain, &[], &headers)
 }
 
@@ -301,6 +328,8 @@ fn serve(name: &str, plain: &'static [u8], compressed: &'static [u8], headers: &
             "text/javascript; charset=utf-8"
         } else if name.ends_with(".css") {
             "text/css; charset=utf-8"
+        } else if name.ends_with(".woff2") {
+            "font/woff2"
         } else if name.ends_with(".png") {
             "image/png"
         } else if name.ends_with(".ico") {

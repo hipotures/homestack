@@ -6,10 +6,36 @@
   const agents = {claude:"Claude Code", codex:"Codex", antigravity:"Antigravity"};
   const widgets = new Map(), datasets = new Map();
   let selection, epoch = 0, snapshot, lastPacket = 0, sourceAt = 0;
-  let currentTheme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-  try { currentTheme = localStorage.getItem("theme") || currentTheme; } catch (_) {}
   const el = (tag, cls, text) => { const e=document.createElement(tag); if(cls)e.className=cls; if(text!==undefined)e.textContent=text;return e; };
   const $ = id => document.getElementById(id);
+  // ---- Toasts (The Mechanics): problems are notifications, not page text. ----
+  // A condition toast (lost connection, failed load) stays while the problem lasts and leaves by itself when it
+  // clears; ✕ hides it until the problem occurs again. Action results are toasts that leave after ~4 s.
+  const TOAST_ICON={success:"M8 14.5a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13zM5 8l2 2 4-4",warning:"M8 1.5l6.5 12h-13zM8 6v3.5M8 11.5v.01",danger:"M8 14.5a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13zM5.5 5.5l5 5M10.5 5.5l-5 5",info:"M8 14.5a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13zM8 7v4.5M8 4.5v.01"};
+  const CLOSE_ICON='<svg class="tm-icon tm-icon--sm" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>';
+  function toast({tone,title,body,timeout=4000,onClose}){
+    const box=el("div",`tm-alert tm-alert--${tone} tm-toast`);box.setAttribute("role",tone==="danger"?"alert":"status");
+    box.insertAdjacentHTML("afterbegin",`<svg class="tm-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="${TOAST_ICON[tone]}"/></svg>`);
+    const text=el("div"),bodyEl=el("div","tm-alert__body",body||"");text.append(el("div","tm-alert__title",title),bodyEl);
+    const close=el("button","tm-btn tm-btn--ghost tm-btn--icon tm-btn--sm");close.type="button";close.setAttribute("aria-label",`Dismiss: ${title}`);close.innerHTML=CLOSE_ICON;
+    const remove=()=>{box.remove();onClose?.();};close.onclick=remove;box.append(text,close);
+    if(timeout){
+      const bar=el("div","tm-toast__progress");bar.style.setProperty("--tm-toast-ms",`${timeout}ms`);box.append(bar);
+      let left=timeout,started=Date.now(),timer=setTimeout(remove,left);
+      box.addEventListener("mouseenter",()=>{clearTimeout(timer);left-=Date.now()-started;bar.style.animationPlayState="paused";});
+      box.addEventListener("mouseleave",()=>{started=Date.now();timer=setTimeout(remove,Math.max(left,1500));bar.style.animationPlayState="running";});
+    }
+    $("toasts").append(box);
+    return {box,setBody:t=>{bodyEl.textContent=t;},remove:()=>{box.remove();}};
+  }
+  const conditions=new Map(),dismissed=new Set();
+  function condition(key,tone,title,body){
+    const shown=conditions.get(key);
+    if(shown){shown.setBody(body);return;}
+    if(dismissed.has(key))return;
+    conditions.set(key,toast({tone,title,body,timeout:0,onClose:()=>{conditions.delete(key);dismissed.add(key);}}));
+  }
+  function resolved(key){dismissed.delete(key);conditions.get(key)?.remove();conditions.delete(key);}
   // Tooltips and tables show full precision; cards use the short AIUsage.fmt forms.
   const format = (v,unit) => v == null ? "—" : unit === "USD" ? AIUsage.fmt.cost(v,true) : unit === "ratio" ? AIUsage.fmt.pct(v*100,2) : unit === "seconds" ? `${AIUsage.fmt.full(Math.round(v*1000)/1000)} s` : AIUsage.fmt.full(Math.round(v*100)/100);
   function initial() {
@@ -39,7 +65,7 @@
     return span?`${day(+span[1])}–${day(+span[2]-1)}`:({"180d":"180 days","1y":"1 year","all":"All"}[range]||"More");
   }
   function select(next,sync) {
-    epoch++; brush=null; selection={...next}; document.documentElement.dataset.agent=selection.agent; snapshot=undefined;
+    epoch++; brush=null; selection={...next}; snapshot=undefined;
     try {for(const [key,value] of Object.entries(next))localStorage.setItem(key,value);}catch(_){}
     return epoch;
   }
@@ -62,7 +88,8 @@
     if(reloading)return;
     if(packet.epoch!==epoch)return;
     lastPacket=Date.now();
-    if(packet.kind==="error") {$("error").textContent="Cannot load data: "+packet.message;$("error").hidden=false;return;}
+    resolved("connection");
+    if(packet.kind==="error") {condition("data","danger","Cannot load data",packet.message);return;}
     const dirty=new Set();
     if(packet.kind==="full") {
       const full=packet.data;
@@ -97,14 +124,27 @@
       snapshot=packet.snapshot;freshness(packet.freshness);
       scopeOptions("host",packet.hosts,"Servers: all");scopeOptions("project",packet.projects,"Projects: all");
     }
-    $("error").hidden=true;
+    resolved("data");resolved("sync");
     render(dirty);
   }
-  function resync() {$("error").hidden=false;$("error").textContent="Synchronizing dataset versions…";$("resync").click();}
-  function freshness(f) {sourceAt=f.source_at;const d=new Date(f.source_at*1000);$("updated-text").textContent=`live · ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;$("updated").classList.remove("stale");$("updated-dot").dataset.status="running";}
-  function theme() {
-    document.documentElement.dataset.theme=currentTheme;
-    $("theme").textContent=currentTheme==="dark"?"☀ Light":"☾ Dark";
+  function resync() {condition("sync","info","Synchronizing","Synchronizing dataset versions…");$("resync").click();}
+  function freshness(f) {sourceAt=f.source_at;const d=new Date(f.source_at*1000);$("updated-text").textContent=`live · ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;$("updated-mark").dataset.state="complete";}
+  // Three themes, one quiet icon button that cycles Light → Dark → Coffee; the icon shows the current theme.
+  const THEMES=["light","dark","coffee"],THEME_INFO={
+    light:{label:"Light",icon:"M8 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM8 1v1.5M8 13.5V15M1 8h1.5M13.5 8H15M3 3l1 1M12 12l1 1M3 13l1-1M12 4l1-1"},
+    dark:{label:"Dark",icon:"M13.5 9.5A6 6 0 0 1 6.5 2.5a6 6 0 1 0 7 7z"},
+    coffee:{label:"Coffee",icon:"M2.5 5.5h9v4a4 4 0 0 1-4 4h-1a4 4 0 0 1-4-4zM11.5 6.5h1.5a1.5 1.5 0 0 1 0 3h-1.5M5 1.5v2M8 1.5v2"}};
+  function theme(id) {
+    const root=document.documentElement;
+    if(id){
+      root.classList.add("tm-theme-switching");root.dataset.tmTheme=id;
+      requestAnimationFrame(()=>requestAnimationFrame(()=>root.classList.remove("tm-theme-switching")));
+      try{localStorage.setItem("tm-theme",id);}catch(_){}
+    }
+    const current=THEMES.includes(root.dataset.tmTheme)?root.dataset.tmTheme:"light",next=THEMES[(THEMES.indexOf(current)+1)%THEMES.length];
+    $("theme-icon").setAttribute("d",THEME_INFO[current].icon);
+    const text=`Theme: ${THEME_INFO[current].label} · click for ${THEME_INFO[next].label}`;
+    $("theme-tip").textContent=text;$("theme").setAttribute("aria-label",text);
     // Series colors are resolved from CSS tokens, so charts are redrawn after the theme rebuild.
     AIUsage.refresh();
     for(const w of widgets.values())if(w.spec)draw(w);
@@ -152,15 +192,19 @@
       if(!w){w=create(spec);widgets.set(spec.id,w);w.spec=spec;draw(w);}
       else if([...w.spec.sourceIds,...spec.sourceIds].some(id=>dirty.has(id))){w.spec=spec;draw(w);}
     }
-    $("raw-toggle").textContent=`${$("raw").hidden?"Show":"Hide"} raw charts (${widgets.size})`;
+    $("raw-count").textContent=String(widgets.size);
   }
+  const COPY_ICON='<svg class="tm-icon tm-icon--sm" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 5.5h8v8h-8zM2.5 10.5v-8h8"/></svg>';
   function create(spec) {
-    const card=el("article","card"),head=el("div","card-head"),actions=el("div","card-actions"),toggle=el("button","toggle","table"),copy=el("button","copy","⧉"),note=el("div","note"),chartHost=el("div","chart"),tableHost=el("div","table-wrap");
+    const card=el("article","tm-panel"),head=el("header","tm-panel__head tm-panel__head--rich"),heading=el("div","tm-panel__heading"),actions=el("div","tm-panel__actions"),body=el("div","tm-panel__body");
+    const toggle=el("button","tm-btn tm-btn--outline tm-btn--sm tm-btn--toggle","Table"),copy=el("button","tm-btn tm-btn--ghost tm-btn--icon tm-btn--sm"),note=el("div","tm-chart-readout aiu-readout"),chartHost=el("div","tm-chart aiu-chart"),tableHost=el("div","tm-table-wrap aiu-table");
     card.id="widget-"+spec.id;chartHost.id="chart-"+spec.id;chartHost.setAttribute("data-ignore-morph","");chartHost.setAttribute("role","img");chartHost.setAttribute("aria-label",spec.title);
-    copy.type=toggle.type="button";copy.hidden=true;copy.title="Copy data as JSON";copy.setAttribute("aria-label",copy.title);
-    head.append(el("h2","",spec.title),el("span","unit",spec.unit),actions);actions.append(copy,toggle);card.append(head,note,chartHost,tableHost);$("cards").append(card);tableHost.hidden=true;
+    copy.type=toggle.type="button";copy.hidden=true;copy.innerHTML=COPY_ICON;copy.setAttribute("aria-label","Copy data as JSON");toggle.setAttribute("aria-pressed","false");
+    tableHost.tabIndex=0;tableHost.setAttribute("role","region");tableHost.setAttribute("aria-label",spec.title+" data");
+    heading.append(el("h3","tm-panel__title",spec.title),el("span","tm-panel__subtitle",spec.unit));actions.append(copy,toggle);head.append(heading,actions);
+    body.append(note,chartHost,tableHost);card.append(head,body);$("cards").append(card);tableHost.hidden=true;
     const w={card,head,note,copy,host:chartHost,tableHost,table:false,spec,chart:null,updates:0};
-    toggle.onclick=()=>{w.table=!w.table;toggle.textContent=w.table?"chart":"table";draw(w);if(!w.table)w.chart?.resize();};
+    toggle.onclick=()=>{w.table=!w.table;toggle.setAttribute("aria-pressed",String(w.table));draw(w);if(!w.table)w.chart?.resize();};
     copy.onclick=()=>copyCharts(copy,[w.spec]);
     return w;
   }
@@ -170,8 +214,7 @@
     const timeRange=datasets.get(spec.series[0]?.dataset)?.range;
     // The time axis starts at the first bucket with data; a chip tells when that is later than the range.
     const first=firstData(spec.series),since=!spec.heat&&timeRange&&first>timeRange.start?first:null;
-    w.note.replaceChildren(...[since?el("span","chip",`data since ${sinceLabel(since,timeRange)}`):null,spec.note].filter(Boolean).map(n=>typeof n==="string"?el("span","",n):n));
-    w.note.hidden=!w.note.childElementCount;
+    w.note.replaceChildren(...[since?`data since ${sinceLabel(since,timeRange)}`:null,spec.note].filter(Boolean).map(n=>el("span","",n)));
     w.host.hidden=w.table;
     w.tableHost.hidden=!w.table;
     if(w.table){renderTable(w);return;}
@@ -192,10 +235,10 @@
   const firstData=series=>Math.min(...series.flatMap(s=>s.points.filter(([,v])=>v>0).map(([t])=>t)));
   const sinceLabel=(t,range)=>{const d=new Date(t*1000),two=n=>String(n).padStart(2,"0");return range.end-range.start<=86400+range.step?`${two(d.getHours())}:${two(d.getMinutes())}`:`${two(d.getDate())}.${two(d.getMonth()+1)}`;};
   function renderTable(w) {
-    // Tables inside a design-system panel (the model views) use the package table; raw chart cards keep theirs.
-    const table=el("table",w.tableHost.closest(".ds-panel")?"ds-table":""),head=el("tr");head.append(el("th","","Bucket start (local)"),...w.spec.series.map(s=>el("th","",s.label||s.id)));table.append(head);
+    const table=el("table","tm-table"),thead=el("thead"),tbody=el("tbody"),head=el("tr");
+    head.append(el("th","","Bucket start (local)"),...w.spec.series.map(s=>el("th","tm-col-num",s.label||s.id)));for(const th of head.children)th.scope="col";thead.append(head);table.append(thead,tbody);
     const times=[...new Set(w.spec.series.flatMap(s=>s.points.map(p=>p[0])))].sort((a,b)=>b-a),maps=w.spec.series.map(s=>new Map(s.points));
-    for(const t of times){const row=el("tr");row.append(el("td","",new Date(t*1000).toLocaleString()),...maps.map(m=>el("td","",format(m.get(t),w.spec.unit))));table.append(row);}
+    for(const t of times){const row=el("tr");row.append(el("td","tm-num",new Date(t*1000).toLocaleString()),...maps.map(m=>el("td","tm-num",format(m.get(t),w.spec.unit))));tbody.append(row);}
     w.tableHost.replaceChildren(table);
   }
   // ---- Overview (main view). Values are backend totals; the browser only lays them out. ----
@@ -203,10 +246,19 @@
   const esc=v=>String(v).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c]);
   const two=n=>String(n).padStart(2,"0");
   const chosen=()=>Object.keys(agents).filter(a=>selection.agent==="all"||selection.agent===a);
+  /** Text with a The Mechanics tooltip (hover and keyboard focus), e.g. the full value behind a short one. */
+  const tip=(html,text,cls="")=>text?`<span class="tm-tip ${cls}" tabindex="0">${html}<span class="tm-tip__bubble" role="tooltip">${esc(text)}</span></span>`:html;
+  /** Small identity square + label, colored by --_c. */
+  const dot=(color,html)=>`<span class="aiu-dot" style="--_c:${esc(color)}">${html}</span>`;
+  const swatch=color=>`<span class="tm-legend__swatch" style="--_series:${esc(color)}"></span>`;
+  const legendItem=(color,html)=>`<li><span class="tm-legend__item">${swatch(color)}${html}</span></li>`;
+  /** Panel head of a generated panel: title, subtitle, optional actions. */
+  const panelHead=(title,sub="",actions="")=>`<header class="tm-panel__head tm-panel__head--rich"><div class="tm-panel__heading"><h3 class="tm-panel__title">${title}</h3>${sub?`<span class="tm-panel__subtitle">${sub}</span>`:""}</div>${actions?`<div class="tm-panel__actions">${actions}</div>`:""}</header>`;
+  const agentColor=a=>AIUsage.colorFor(agents[a]);
   let metric="cost",trendChart,heatChart,hoursChart;
   try{metric=["tokens","types"].includes(localStorage.getItem("metric"))?localStorage.getItem("metric"):"cost";}catch(_){}
   // Token types stack to the total: output is drawn without its reasoning part.
-  const TYPES=[["cached","Cached input","--tok-cached"],["input","Uncached input","--tok-uncached"],["written","Cache write","--tok-written"],["output","Output","--tok-output"],["reasoning","Reasoning","--tok-reasoning"]];
+  const TYPES=[["cached","Cached input","--aiu-tok-cached"],["input","Uncached input","--aiu-tok-uncached"],["written","Cache write","--aiu-tok-written"],["output","Output","--aiu-tok-output"],["reasoning","Reasoning","--aiu-tok-reasoning"]];
   /** Bucket times of the current range, oldest first. */
   const buckets=range=>{const out=[];for(let t=range.start;t<range.end;t+=range.step)out.push(t);return out;};
   const bucketLabel=step=>step<3600?`${step/60}-minute buckets`:step<86400?`${step/3600}-hour buckets`:step===86400?"daily buckets":step===604800?"weekly buckets":`${step/86400}-day buckets`;
@@ -216,24 +268,35 @@
   }
   /** Sums point lists by time; used only to draw combined sparklines and stacks. */
   function sumPoints(lists){const m=new Map();for(const list of lists)for(const [t,v]of list||[])m.set(t,(m.get(t)||0)+v);return m;}
-  function delta(current,previous,{goodUp=false,points=false}={}){
-    if(current==null||previous==null||(!points&&!previous))return "";
+  /** Trend vs the previous period of the same length; good is "up", "down" or null (neutral metric). */
+  function delta(current,previous,{good=null,points=false}={}){
+    if(current==null||previous==null||(!points&&!previous))return `<span class="tm-trend">— n/a<span class="tm-sr-only"> (no previous period)</span></span>`;
     const change=points?(current-previous)*100:(current-previous)/previous*100;
-    if(Math.abs(change)<(points?0.05:0.5))return `<span class="delta faint" title="vs previous period">±0${points?" pp":"%"}</span>`;
+    if(Math.abs(change)<(points?0.05:0.5))return `<span class="tm-trend">±0${points?" pp":"%"}<span class="tm-sr-only"> vs previous period</span></span>`;
     const up=change>0,text=points?`${Math.abs(change).toFixed(1)} pp`:`${Math.abs(change)>=100?Math.round(Math.abs(change)):Math.abs(change).toFixed(0)}%`;
-    return `<span class="delta ${up===goodUp?"down":"up"}" title="vs previous period of the same length">${up?"▲":"▼"} ${text}</span>`;
+    const tone=!good?"":(up===(good==="up"))?"tm-trend--good":"tm-trend--bad",verdict=tone==="tm-trend--good"?"improving":tone?"worsening":"change";
+    return `<span class="tm-trend ${tone}">${up?"↑ +":"↓ −"}${text}<span class="tm-sr-only"> vs previous period (${verdict})</span></span>`;
   }
+  /** Agent shares of one total, as identity-colored labels. */
   function split(key,summary){
     const parts=chosen().map(a=>({a,v:summary[a]?.[key]?.value})),total=parts.reduce((s,p)=>s+(p.v||0),0);
     if(!total)return "";
-    return `<div class="stack"><div class="split" aria-hidden="true">${parts.map(p=>`<span style="width:${(p.v||0)/total*100}%;background:${AIUsage.colorFor(agents[p.a])}"></span>`).join("")}</div>
-      <div class="legend-row">${parts.map(p=>`<span><span style="color:${AIUsage.colorFor(agents[p.a])}">●</span> ${agents[p.a]} ${p.v==null?"not reported":Math.round(p.v/total*100)+"%"}</span>`).join("")}</div></div>`;
+    return parts.map(p=>dot(agentColor(p.a),`${agents[p.a]} ${p.v==null?"not reported":Math.round(p.v/total*100)+"%"}`)).join("");
   }
   function sparkline(points,color){
     const values=points.map(([,v])=>v),max=Math.max(...values,0);
     if(values.length<2||!max)return "";
     const xy=points.map(([,v],i)=>[i*300/(points.length-1),34-v/max*30]),line=xy.map(([x,y],i)=>`${i?"L":"M"}${x.toFixed(1)} ${y.toFixed(1)}`).join(" ");
-    return `<svg class="spark" viewBox="0 0 300 36" preserveAspectRatio="none" aria-hidden="true"><path d="${line} L300 36 L0 36 Z" fill="${color}" fill-opacity=".14"></path><path d="${line}" fill="none" stroke="${color}" stroke-width="1.5" vector-effect="non-scaling-stroke"></path></svg>`;
+    const [lx,ly]=xy.at(-1);
+    return `<svg class="aiu-kpi__spark" viewBox="0 0 300 36" preserveAspectRatio="none" aria-hidden="true"><path d="${line} L300 36 L0 36 Z" fill="${color}" fill-opacity="${css("--tm-chart-fill-opacity")||0.2}"></path><path d="${line}" fill="none" stroke="${color}" stroke-width="1.5" vector-effect="non-scaling-stroke"></path><circle cx="${lx}" cy="${ly}" r="2.5" fill="${color}" vector-effect="non-scaling-stroke"></circle></svg>`;
+  }
+  /** Panel grids never leave a hole: an odd last panel of a two-column grid spans the row. */
+  function balanceAll(){
+    for(const grid of document.querySelectorAll('.aiu-grid[data-cols="2"]')){
+      const shown=[...grid.children].filter(c=>!c.hidden);
+      shown.forEach((c,i)=>c.classList.toggle("aiu-span-all",shown.length%2===1&&i===shown.length-1));
+    }
+    $("hours").classList.toggle("aiu-wide",$("heat-detail").hidden);
   }
   function renderOverview() {
     const summary=datasets.get("all.summary")?.details;
@@ -241,9 +304,9 @@
     const totals=summary.totals||{},previous=Object.fromEntries(Object.entries(summary.previous?.totals||{}).map(([k,v])=>[k,v.value])),range=datasets.get("all.summary").range;
     const sel=chosen(),tokens=sel.map(a=>datasets.get(`${a}.tokens`)).filter(d=>d&&d.state!=="unavailable");
     const category=id=>tokens.map(d=>(d.details.categories||[]).find(c=>c.id===id)?.points);
-    const lead=sel.length===1?AIUsage.colorFor(agents[sel[0]]):css("--text-2");
+    const lead=sel.length===1?agentColor(sel[0]):css("--tm-text-2");
     // Charts and their captions sit at the bottom of every tile so all four line up.
-    const kpi=(label,value,deltaHtml,chart,detail,title="",full="")=>`<div class="card kpi"><div class="eyebrow" title="${esc(title)}">${label}</div><div class="figure"><span class="kpi-value${value==="—"?" faint":""}" title="${esc(full)}">${value}</span>${deltaHtml}</div><div class="kpi-foot"><div class="kpi-chart">${chart}</div><div class="kpi-detail">${detail}</div></div></div>`;
+    const kpi=(label,value,trend,chart,detail,full="",labelTip="")=>`<div class="tm-kpi"><div class="tm-kpi__label">${tip(label,labelTip)}</div><div class="tm-kpi__value">${tip(value,full)}</div><div class="tm-kpi__foot">${trend}<span class="tm-meta">vs previous period</span></div>${chart||'<div class="aiu-kpi__spark"></div>'}<div class="aiu-kpi__detail">${detail}</div></div>`;
     const spark=points=>live.map(t=>[t,points.get(t)||0]);
     const totalSeries=sumPoints(category("total")),firstActive=Math.min(...[...totalSeries].filter(([,v])=>v>0).map(([t])=>t));
     const live=buckets(range).filter(t=>t>=firstActive||!Number.isFinite(firstActive));
@@ -253,21 +316,20 @@
     const known=hits.filter(([,v])=>v!=null),low=known.reduce((m,h)=>h[1]<m[1]?h:m,[0,101]);
     // Near-empty buckets can drop to 0%, so the scale follows the range-wide rate and lower buckets are clamped.
     const overall=(totals.cacheHit?.value??0)*100,floor=overall>=98?98:Math.max(0,Math.floor(overall/5)*5-5);
-    const hitBars=known.length?`<div class="hits" title="scale ${floor}–100%" aria-hidden="true">${hits.map(([,v])=>v==null?`<span style="height:2px;background:var(--track)"></span>`:`<span style="height:${Math.max(2,Math.round((Math.max(v,floor)-floor)/(100-floor)*40))}px;background:${v<Math.max(floor,overall-1)?css("--warn"):css("--tok-cached")}"></span>`).join("")}</div>`:"";
+    const hitBars=known.length?`<div class="aiu-hits" aria-hidden="true">${hits.map(([,v])=>v==null?`<span style="height:2px;background:var(--aiu-track)"></span>`:`<span style="height:${Math.max(2,Math.round((Math.max(v,floor)-floor)/(100-floor)*36))}px;background:${v<Math.max(floor,overall-1)?"var(--tm-warning)":"var(--aiu-tok-cached)"}"></span>`).join("")}</div>`:"";
     const inputs=["cached","input","written"].map(k=>totals[k]?.value||0),inputAll=inputs.reduce((s,n)=>s+n,0);
-    const hitNote=inputAll?`<div class="stack"><div class="split" aria-hidden="true">${inputs.map((n,i)=>`<span style="width:${n/inputAll*100}%;background:var(${["--tok-cached","--tok-uncached","--tok-written"][i]})"></span>`).join("")}</div>
-      <div class="legend-row"><span><span style="color:var(--tok-cached)">●</span> cached ${F.pct(inputs[0]/inputAll*100)}</span>${known.length?`<span>min ${F.pct(low[1])} at ${timeLabel(low[0],range)}</span>`:""}</div></div>`:"";
+    const hitNote=inputAll?[dot("var(--aiu-tok-cached)",`cached ${F.pct(inputs[0]/inputAll*100)}`),known.length?`<span>scale ${floor}–100% · min ${F.pct(low[1])} at ${timeLabel(low[0],range)}</span>`:""].join(""):"";
     const cost=sumPoints(sel.map(a=>datasets.get(`${a}.cost`)?.details?.timeline)),outputs=sumPoints(category("output"));
     const output=totals.output?.value,reasoning=totals.reasoning?.value,share=output&&reasoning!=null?reasoning/output:null;
-    const outputBody=output?`<div class="stack"><div class="split" aria-hidden="true"><span style="width:${(share||0)*100}%;background:var(--tok-reasoning)"></span><span style="width:${(1-(share||0))*100}%;background:var(--tok-output)"></span></div>
-      <div class="legend-row"><span>${share==null?"reasoning not reported":`<span style="color:var(--tok-reasoning)">●</span> reasoning ${F.tokens(reasoning)} · ${Math.round(share*100)}%`}</span><span>response ${F.tokens(output-(reasoning||0))}</span></div></div>`:"";
+    const outputBody=output?[share==null?"<span>reasoning not reported</span>":dot("var(--aiu-tok-reasoning)",`reasoning ${F.tokens(reasoning)} · ${Math.round(share*100)}%`),`<span>response ${F.tokens(output-(reasoning||0))}</span>`].join(""):"";
     $("kpis").innerHTML=[
-      kpi("Cost",F.cost(totals.cost?.value),delta(totals.cost?.value,previous.cost),sparkline(spark(cost),lead),split("cost",summary),"",F.cost(totals.cost?.value,true)),
-      kpi("Tokens",F.tokens(totals.total?.value),delta(totals.total?.value,previous.total),sparkline(spark(totalSeries),lead),split("total",summary),"",F.full(totals.total?.value)),
-      kpi("Cache hit",totals.cacheHit?.value==null?"—":F.pct(totals.cacheHit.value*100),delta(totals.cacheHit?.value,previous.cacheHit,{goodUp:true,points:true}),hitBars,hitNote),
-      kpi("Output",F.tokens(output),delta(output,previous.output),sparkline(spark(outputs),getComputedStyle(document.documentElement).getPropertyValue("--tok-output").trim()),outputBody,"Output includes reasoning tokens",F.full(output)),
+      kpi("Cost",F.cost(totals.cost?.value),delta(totals.cost?.value,previous.cost,{good:"down"}),sparkline(spark(cost),lead),split("cost",summary),F.cost(totals.cost?.value,true)),
+      kpi("Tokens",F.tokens(totals.total?.value),delta(totals.total?.value,previous.total),sparkline(spark(totalSeries),lead),split("total",summary),F.full(totals.total?.value)),
+      kpi("Cache hit",totals.cacheHit?.value==null?"—":F.pct(totals.cacheHit.value*100),delta(totals.cacheHit?.value,previous.cacheHit,{good:"up",points:true}),hitBars,hitNote),
+      kpi("Output",F.tokens(output),delta(output,previous.output),sparkline(spark(outputs),css("--aiu-tok-output")),outputBody,F.full(output),"Output includes reasoning tokens"),
     ].join("");
     renderTrend(range,firstActive);renderShare();renderScopes(range);renderComposition(totals);renderModels();renderHours();renderHeat();renderSpikes(summary,range);renderAgents(summary,range);
+    balanceAll();
   }
   let shareMetric="cost",shareChart,shareSpecs=[];
   try{shareMetric=localStorage.getItem("shareMetric")==="tokens"?"tokens":"cost";}catch(_){}
@@ -278,11 +340,11 @@
     const range=d.range,series=d.series.find(s=>s.id===shareMetric),values=new Map(series?.points||[]);
     const first=series?.points[0]?.[0]??range.start;
     const points=buckets(range).filter(t=>t>=first).map(t=>[t*1000,values.get(t)??null]);
-    const orange=AIUsage.colorFor("Claude Code"),blue=AIUsage.colorFor("Codex"),totals=d.details[shareMetric];
+    const orange=agentColor("claude"),blue=agentColor("codex"),totals=d.details[shareMetric];
     const fmt=shareMetric==="cost"?v=>F.cost(v,true):F.full;
     for(const b of document.querySelectorAll("[data-share-metric]"))b.setAttribute("aria-pressed",String(b.dataset.shareMetric===shareMetric));
     $("share-sub").textContent=`Claude Code share of ${shareMetric} · ${bucketLabel(range.step)} · 50% is an even split`;
-    $("share-totals").innerHTML=totals?.share!=null?["claude","codex"].map((a,i)=>`<span><i class="sw" style="background:${i?blue:orange}"></i>${agents[a]} <strong>${F.pct((i?1-totals.share:totals.share)*100)}</strong> · ${esc(fmt(totals[a]))}</span>`).join("")+`<span class="faint">selected range</span>`:"";
+    $("share-totals").innerHTML=totals?.share!=null?["claude","codex"].map((a,i)=>legendItem(i?blue:orange,`${agents[a]} <b>${F.pct((i?1-totals.share:totals.share)*100)}</b> · ${esc(fmt(totals[a]))}`)).join("")+`<li class="tm-meta">selected range</li>`:"";
     $("share-note").textContent=["100% = Claude Code + Codex. Antigravity excluded. Empty buckets are gaps.",!series?.points.length?"Comparison unavailable: both agents need complete usage data in this scope.":"",...(shareMetric==="cost"?d.warnings:[])].filter(Boolean).join(" ");
     $("share-chart").hidden=!series?.points.length;if($("share-chart").hidden)return;
     // Fill each line segment back to the 50% baseline; split exactly at crossings.
@@ -296,14 +358,14 @@
     const latest=series.points.at(-1);
     shareChart.setOption({
       grid:{left:8,right:62,top:24,bottom:8,containLabel:true},
-      tooltip:{trigger:"axis",formatter:params=>{const p=params.find(p=>p.seriesId==="share-line"),v=p?.value?.[1];return v==null?"No usage in this bucket":`${esc(new Date(p.value[0]).toLocaleString())}<br>Claude Code: ${F.pct(v*100)}<br>Codex: ${F.pct((1-v)*100)}`;}},
+      tooltip:{trigger:"axis",formatter:params=>{const p=params.find(p=>p.seriesId==="share-line"),v=p?.value?.[1];return v==null?AIUsage.tipRow("No usage in this bucket","",{muted:true}):AIUsage.tipTitle(new Date(p.value[0]).toLocaleString())+AIUsage.tipRow("Claude Code",F.pct(v*100),{color:orange})+AIUsage.tipRow("Codex",F.pct((1-v)*100),{color:blue});}},
       xAxis:{type:"time",min:first*1000,max:range.end*1000,axisLabel:{hideOverlap:true}},
       yAxis:{type:"value",min:0,max:1,interval:.25,axisLabel:{showMinLabel:true,showMaxLabel:true,formatter:v=>`${Math.round(v*100)}%`}},
       series:[{id:"share-fill",type:"custom",coordinateSystem:"cartesian2d",silent:true,tooltip:{show:false},data:areas,
         renderItem:(params,api)=>{const a=api.value(1),b=api.value(3),color=(a+b)/2>=.5?orange:blue,left=api.coord([api.value(0),a]),right=api.coord([api.value(2),b]);return {type:"group",children:[{type:"polygon",shape:{points:[api.coord([api.value(0),.5]),left,right,api.coord([api.value(2),.5])]},style:{fill:color,opacity:.16}},{type:"polyline",shape:{points:[left,right]},style:{stroke:color,lineWidth:2,fill:null}}]};},
       },{id:"share-line",name:"Claude Code share",type:"line",data:points,showSymbol:true,symbolSize:(value,p)=>points[p.dataIndex-1]?.[1]==null&&points[p.dataIndex+1]?.[1]==null?6:0,itemStyle:{color:p=>p.value[1]>=.5?orange:blue},connectNulls:false,lineStyle:{opacity:0},
-        markLine:{silent:true,symbol:"none",label:{show:false},lineStyle:{color:css("--muted"),type:"dashed",width:1},data:[{yAxis:.5}]},
-        markPoint:{symbol:"circle",symbolSize:6,itemStyle:{color:latest[1]>=.5?orange:blue},label:{show:true,position:"right",color:css("--text"),formatter:F.pct(latest[1]*100)},data:[{coord:[latest[0]*1000,latest[1]]}]},
+        markLine:{silent:true,symbol:"none",label:{show:false},lineStyle:{color:css("--tm-chart-target"),type:[2,3],width:1.5},data:[{yAxis:.5}]},
+        markPoint:{symbol:"circle",symbolSize:6,itemStyle:{color:latest[1]>=.5?orange:blue},label:{show:true,position:"right",color:css("--tm-text"),fontFamily:css("--tm-font-mono"),fontWeight:600,formatter:F.pct(latest[1]*100)},data:[{coord:[latest[0]*1000,latest[1]]}]},
       }],
     },{replaceMerge:["series"]});
     shareChart.resize();
@@ -371,12 +433,12 @@
   function brushChips(parts){
     if(!parts)return "";
     const f=trendView.fmtFull;
-    return `<span class="chip"><strong>${stamp(parts.start)} – ${stamp(parts.end)} · ${esc(f(parts.total))}</strong></span>`
-      +parts.rows.map(r=>`<span class="chip"><span style="color:${esc(r.color)}">●</span> ${esc(r.name)} ${esc(f(r.value))}</span>`).join("")
-      +`<button type="button" class="chip" id="brush-clear" style="border:0;cursor:pointer" aria-label="Clear selection" title="Clear selection (Esc)">✕</button>`;
+    return `<span class="tm-chart-readout__value">${stamp(parts.start)} – ${stamp(parts.end)} · ${esc(f(parts.total))}</span>`
+      +parts.rows.map(r=>dot(r.color,`${esc(r.name)} ${esc(f(r.value))}`)).join("")
+      +`<button type="button" class="tm-btn tm-btn--ghost tm-btn--icon tm-btn--sm" id="brush-clear" aria-label="Clear selection (Esc)">${CLOSE_ICON}</button>`;
   }
   const brushSeries=parts=>({id:"selection",type:"line",data:[],silent:true,markArea:{silent:true,
-    itemStyle:{color:getComputedStyle(document.documentElement).getPropertyValue("--text-2").trim()||"#888",opacity:.12},
+    itemStyle:{color:css("--tm-text-2"),opacity:.12},
     data:parts?[[{xAxis:(parts.start-trendView.range.step/2)*1000},{xAxis:(parts.end-trendView.range.step/2)*1000}]]:[]}});
   function paintBrush(){
     if(!trendView)return;
@@ -401,7 +463,7 @@
     if(metric==="types"){
       const kind=id=>sumPoints(sel.map(a=>datasets.get(`${a}.tokens`)).filter(d=>d&&d.state!=="unavailable").map(d=>(d.details.categories||[]).find(c=>c.id===id)?.points));
       const reasoning=kind("reasoning");
-      for(const [id,name,color]of TYPES)series.push({name,color:getComputedStyle(document.documentElement).getPropertyValue(color).trim(),points:[...kind(id)].map(([t,v])=>[t,id==="output"?v-(reasoning.get(t)||0):v])});
+      for(const [id,name,color]of TYPES)series.push({name,color:css(color),points:[...kind(id)].map(([t,v])=>[t,id==="output"?v-(reasoning.get(t)||0):v])});
     }
     else for(const a of sel){
       const d=datasets.get(`${a}.${metric==="cost"?"cost":"tokens"}`);
@@ -417,13 +479,13 @@
     $("trend-title").textContent=metric==="cost"?"Cost over time":"Tokens over time";
     $("trend-sub").textContent=`${bucketLabel(range.step)} · stacked by ${metric==="types"?"token type":"model"} · Shift+drag to sum a span`;
     for(const b of document.querySelectorAll("[data-metric]"))b.setAttribute("aria-pressed",String(b.dataset.metric===metric));
-    $("trend-legend").innerHTML=visible.map(s=>`<span><i class="sw" style="background:${s.color||AIUsage.colorFor(s.key||s.name)}"></i>${esc(s.name)}</span>`).join("");
-    trendView={visible,times:times.filter(t=>t>=first),range,fmtFull,chips:first>range.start?`<span class="chip">data since ${timeLabel(first,range)}</span>`:""};
+    $("trend-legend").innerHTML=visible.map(s=>legendItem(s.color||AIUsage.colorFor(s.key||s.name),esc(s.name))).join("");
+    trendView={visible,times:times.filter(t=>t>=first),range,fmtFull,chips:first>range.start?`<span>data since ${timeLabel(first,range)}</span>`:""};
     const selected=brushParts();
     $("trend-chips").innerHTML=trendView.chips+brushChips(selected);
     const peak=[...stack].filter(([t])=>t>=first).reduce((m,p)=>p[1]>m[1]?p:m,[0,0]);
     const usageTooltip=AIUsage.tooltipFormatter(fmtFull);
-    const eventTooltip=events=>events.map(e=>`<div style="margin-top:6px"><span style="color:${esc(e.lineStyle.color)}">●</span> ${esc(e.name)}<br><span style="color:var(--muted)">${esc(new Date(e.xAxis).toLocaleString())}</span></div>`).join("");
+    const eventTooltip=events=>events.map(e=>AIUsage.tipRow(e.name,"",{color:e.lineStyle.color})+AIUsage.tipRow(new Date(e.xAxis).toLocaleString(),"",{muted:true})).join("");
     // Include every quota observation in the hovered usage bucket, even off the line itself.
     const eventsByBucket=new Map();
     for(const event of overlay.events){
@@ -447,15 +509,15 @@
         id:s.name,barMaxWidth:28,...(s.color?{itemStyle:{color:s.color}}:{}),
         markPoint:i===visible.length-1&&peak[1]>0?{...AIUsage.peak(()=>`peak ${timeLabel(peak[0],range)}  ${fmtShort(peak[1])}`),data:[{coord:[peak[0]*1000,peak[1]]}]}:undefined,
       })), {id:"quota-overlay",type:"line",data:[],showSymbol:false,silent:false,
-        markLine:{symbol:["none","none"],lineStyle:{type:"dashed",width:1.5},label:{show:true,position:"insideEndTop",fontSize:10,color:css("--muted"),backgroundColor:css("--bg"),padding:3},data:markerEvents},
+        markLine:{symbol:["none","none"],lineStyle:{type:"dashed",width:1.5},label:{show:true,position:"insideEndTop",fontSize:10,color:css("--tm-text-2"),backgroundColor:css("--tm-surface"),padding:3},data:markerEvents},
         markArea:{silent:false,label:{show:false},emphasis:{itemStyle:{opacity:.12}},tooltip:{trigger:"item",formatter:p=>esc(p.name)},data:overlay.areas}
       },brushSeries(selected)],
     },{replaceMerge:["series"]});
   }
   // Breakdown by the scopes left at "all"; it follows the trend metric (token types count as tokens).
   let scopeBy="project",scopesChart;
-  // Distinct from the agent hues; the largest scope gets the first color, unlabeled usage stays grey.
-  const SCOPE_COLORS=["#5b8def","#a78bfa","#e6c34a","#e879a6","#38bdf8","#f87171","#c4b5fd","#fde68a"];
+  // Chart palette slots away from the agent hues; the largest scope gets the first color, unlabeled usage stays grey.
+  const SCOPE_SLOTS=[1,4,5,8,6,7,3,2];
   try{scopeBy=localStorage.getItem("scopeBy")==="host"?"host":"project";}catch(_){}
   function renderScopes(range) {
     const d=datasets.get("all.scopes"),open=["project","host"].filter(k=>selection[k]==="*"),by=open.includes(scopeBy)?scopeBy:open[0];
@@ -468,7 +530,7 @@
     const first=Math.min(...rows.flatMap(r=>r.points.filter(([,v])=>v>0).map(([t])=>t))),times=buckets(range).filter(t=>t>=first);
     $("scopes-title").textContent=`${unit==="cost"?"Cost":"Tokens"} by ${names[by]}`;
     $("scopes-sub").textContent=`${bucketLabel(range.step)} · stacked by ${names[by]}`;
-    $("scopes-chips").innerHTML=[first>range.start?`<span class="chip">data since ${timeLabel(first,range)}</span>`:"",...(unit==="cost"?d.warnings:[]).map(w=>`<span class="chip">${esc(w)}</span>`)].join("");
+    $("scopes-chips").innerHTML=[first>range.start?`<span>data since ${timeLabel(first,range)}</span>`:"",...(unit==="cost"?d.warnings:[]).map(w=>`<span>${esc(w)}</span>`)].join("");
     scopesChart=scopesChart||AIUsage.init($("scopes-chart"));
     scopesChart.setOption({
       grid:{left:8,right:8,top:16,bottom:36,containLabel:true},
@@ -476,20 +538,21 @@
       tooltip:{trigger:"axis",formatter:AIUsage.tooltipFormatter(fmtFull)},
       xAxis:{type:"time",min:(first-range.step/2)*1000,max:range.end*1000,axisLabel:{hideOverlap:true}},
       yAxis:{type:"value",axisLabel:{formatter:fmtShort}},
-      series:rows.map(r=>{const m=new Map(r.points),color=r.name==="(unattributed)"?getComputedStyle(document.documentElement).getPropertyValue("--muted").trim():SCOPE_COLORS[rows.filter(x=>x.name!=="(unattributed)").indexOf(r)%SCOPE_COLORS.length];
+      series:rows.map(r=>{const m=new Map(r.points),color=r.name==="(unattributed)"?css("--tm-text-3"):css(`--tm-chart-${SCOPE_SLOTS[rows.filter(x=>x.name!=="(unattributed)").indexOf(r)%SCOPE_SLOTS.length]}`);
         return AIUsage.bar(r.name,times.map(t=>[t*1000,m.get(t)||0]),r.name,{id:r.name,barMaxWidth:28,itemStyle:{color}});}),
     },{replaceMerge:["series"]});
   }
   function renderComposition(totals) {
     const v=k=>totals[k]?.value||0,reasoning=totals.reasoning?.value;
-    const rows=[["Cached input",v("cached"),"--tok-cached"],["Uncached input",v("input"),"--tok-uncached"],["Cache write",v("written"),"--tok-written"],
-      [reasoning==null?"Output":"Output (excl. reasoning)",v("output")-(reasoning||0),"--tok-output"],...(reasoning==null?[]:[["Reasoning",reasoning,"--tok-reasoning"]])];
+    const rows=[["Cached input",v("cached"),"--aiu-tok-cached"],["Uncached input",v("input"),"--aiu-tok-uncached"],["Cache write",v("written"),"--aiu-tok-written"],
+      [reasoning==null?"Output":"Output (excl. reasoning)",v("output")-(reasoning||0),"--aiu-tok-output"],...(reasoning==null?[]:[["Reasoning",reasoning,"--aiu-tok-reasoning"]])];
     const all=rows.reduce((s,r)=>s+r[1],0),shown=rows.filter(r=>r[1]>0);
     const ratio=v("output")?Math.round(v("cached")/v("output")):null;
     $("composition").hidden=!all;
-    $("composition").innerHTML=`<div><h2>Token composition</h2>${ratio!=null?`<div class="sub">each output token comes with <b style="color:var(--text)">${F.full(ratio)}</b> cached input tokens</div>`:""}</div>
-      ${all?`<div class="bars">${shown.map(([label,n,color])=>{const p=n/all*100;return `<div class="bar-row"><div class="head"><span>${label}</span><span class="num">${F.full(n)} <span class="faint">${p<1?p.toFixed(2):p.toFixed(1)}%</span></span></div><div class="track" aria-hidden="true"><span style="width:${Math.max(0.8,p)}%;background:var(${color})"></span></div></div>`;}).join("")}</div>`:`<div class="note">No token usage in this range.</div>`}
-      ${all&&!v("written")?`<div class="note faint">Cache write: 0, hidden because there is no data in this range.</div>`:""}${reasoning==null&&all?`<div class="note faint">Reasoning is not reported by the selected agents.</div>`:""}`;
+    const notes=[all&&!v("written")?"Cache write: 0, hidden because there is no data in this range.":"",reasoning==null&&all?"Reasoning is not reported by the selected agents.":""].filter(Boolean);
+    $("composition").innerHTML=panelHead("Token composition",ratio!=null?`each output token comes with ${F.full(ratio)} cached input tokens`:"")+`<div class="tm-panel__body">
+      ${all?`<div class="aiu-rows">${shown.map(([label,n,color])=>{const p=n/all*100;return `<div class="aiu-row"><div class="aiu-row__head"><span class="aiu-row__name"><span class="aiu-swatch" style="--_c:var(${color})"></span>${label}</span><span class="aiu-row__value">${F.full(n)}<small>${p<1?p.toFixed(2):p.toFixed(1)}%</small></span></div><div class="aiu-track" aria-hidden="true"><span style="width:${Math.max(0.8,p)}%;background:var(${color})"></span></div></div>`;}).join("")}</div>`:`<p class="tm-meta">No token usage in this range.</p>`}
+      ${notes.map(n=>`<p class="tm-meta aiu-note">${n}</p>`).join("")}</div>`;
   }
   function renderModels() {
     const rows=[];
@@ -503,11 +566,10 @@
     const active=rows.filter(r=>r.cost>0||r.tokens>0).sort((x,y)=>(y.cost||0)-(x.cost||0)||y.tokens-x.tokens),idle=rows.filter(r=>!active.includes(r));
     const max=Math.max(...active.map(r=>r.cost||0),0);
     $("models").hidden=!active.length;
-    $("models").innerHTML=`<div><h2>Cost by model</h2><div class="sub">${active.length} of ${rows.length} models active in this range</div></div>
-      <div class="bars">${active.map(r=>{const key=`${agents[r.agent]} · ${r.model}`,color=AIUsage.colorFor(key);return `<div class="model"><div class="head"><span class="name"><i class="sw" style="background:${color}"></i>${esc(r.model)}</span><span class="cost" title="${r.cost==null?"":F.cost(r.cost,true)}">${r.cost==null?"—":F.cost(r.cost)}</span></div>
-        <div class="track thick" aria-hidden="true"><span style="width:${max&&r.cost?Math.max(1,r.cost/max*100):0}%;background:${color}"></span></div>
-        <div class="meta"><span title="${F.full(r.tokens)}">${F.tokens(r.tokens)} tokens</span>${r.cost&&r.tokens?`<span>${F.cost(r.cost/r.tokens*1e6)} / 1M</span>`:""}${["codex","antigravity"].includes(r.agent)?`<span>${r.cost==null?"no price":"estimated price"}</span>`:""}</div></div>`;}).join("")}
-      ${idle.map((r,i)=>`<div class="idle${i?"":" first"}"><span class="name"><i class="sw" style="background:${AIUsage.colorFor(`${agents[r.agent]} · ${r.model}`)}"></i>${esc(r.model)}</span><span class="num">—</span></div>`).join("")}</div>`;
+    $("models").innerHTML=panelHead("Cost by model",`${active.length} of ${rows.length} models active in this range`,`<span class="tm-panel__meta">USD</span>`)+`<div class="tm-panel__body"><div class="aiu-rows">${active.map(r=>{const color=AIUsage.colorFor(`${agents[r.agent]} · ${r.model}`);return `<div class="aiu-row"><div class="aiu-row__head"><span class="aiu-row__name"><span class="aiu-swatch" style="--_c:${color}"></span>${esc(r.model)}</span><span class="aiu-row__value">${r.cost==null?"—":tip(F.cost(r.cost),F.cost(r.cost,true))}</span></div>
+        <div class="aiu-track" aria-hidden="true"><span style="width:${max&&r.cost?Math.max(1,r.cost/max*100):0}%;background:${color}"></span></div>
+        <div class="aiu-row__meta"><span>${tip(`${F.tokens(r.tokens)} tokens`,`${F.full(r.tokens)} tokens`)}</span>${r.cost&&r.tokens?`<span>${F.cost(r.cost/r.tokens*1e6)} / 1M</span>`:""}${["codex","antigravity"].includes(r.agent)?`<span>${r.cost==null?"no price":"estimated price"}</span>`:""}</div></div>`;}).join("")}
+      ${idle.map(r=>`<div class="aiu-row aiu-row--idle"><div class="aiu-row__head"><span class="aiu-row__name"><span class="aiu-swatch" style="--_c:var(--tm-text-3)"></span>${esc(r.model)}</span><span class="aiu-row__value">—</span></div></div>`).join("")}</div></div>`;
   }
   function renderHours() {
     const d=datasets.get("all.activeHours"),available=d&&d.state!=="unavailable"&&d.series.length>0;
@@ -515,10 +577,9 @@
     $("hours-chart").hidden=!available;
     $("hours-empty").hidden=!!available;
     $("hours-empty").textContent=d?.warnings?.join(" · ")||"No activity observations are available for this selection.";
-    $("hours-total").textContent=d?.total==null?"—":`≈ ${hours(d.total)}`;
-    $("hours-total").title="Overall estimated time; overlapping agents count once";
+    $("hours-total").innerHTML=tip(d?.total==null?"—":`≈ ${hours(d.total)}`,"Overall estimated time; overlapping agents count once","aiu-tip-end");
     const rows=chosen().map(agent=>({agent,series:d?.series.find(s=>s.id===agent)}));
-    $("hours-legend").innerHTML=rows.map(({agent,series})=>`<span><i class="sw" style="background:${AIUsage.colorFor(agents[agent])}"></i>${agents[agent]} <span class="num">${series?`≈ ${hours(total(series.points))}`:"not reported"}</span></span>`).join("");
+    $("hours-legend").innerHTML=rows.map(({agent,series})=>legendItem(agentColor(agent),`${agents[agent]} <span class="tm-mono">${series?`≈ ${hours(total(series.points))}`:"not reported"}</span>`)).join("");
     if(!available){$("hours-sub").textContent="estimated active hours · selected range";return;}
     const range=d.range;
     $("hours-sub").textContent=`estimated active hours · ${bucketLabel(range.step)} · through ${new Date(range.end*1000).toLocaleString()}`;
@@ -528,9 +589,9 @@
       tooltip:{trigger:"axis",formatter:AIUsage.tooltipFormatter(hours)},
       xAxis:{type:"time",min:range.start*1000,max:range.end*1000,axisLabel:{hideOverlap:true}},
       yAxis:{type:"value",min:0,axisLabel:{formatter:hours}},
-      series:rows.filter(r=>r.series).map(({agent,series})=>{const color=AIUsage.colorFor(agents[agent]);return {
+      series:rows.filter(r=>r.series).map(({agent,series},i)=>{const color=agentColor(agent);return {
         id:agent,name:agents[agent],type:"line",showSymbol:false,smooth:false,connectNulls:false,
-        itemStyle:{color},lineStyle:{color,width:2},areaStyle:{color,opacity:.08},
+        itemStyle:{color},lineStyle:{color,width:2,type:[ "solid",[6,3],[2,3]][i%3]},areaStyle:{color,opacity:.08},
         data:series.points.map(([t,v])=>[t*1000,v]),
       };}),
     },{replaceMerge:["series"]});
@@ -542,21 +603,21 @@
     const cells=new Map(),split=new Map();for(const s of activity.series)for(const [t,v]of s.points){const d=new Date(t*1000),key=`${(d.getDay()+6)%7},${d.getHours()}`,parts=split.get(key)||{};cells.set(key,(cells.get(key)||0)+v);parts[s.dimensions.model]=(parts[s.dimensions.model]||0)+v;split.set(key,parts);}
     const data=[];for(let day=0;day<7;day++)for(let hour=0;hour<24;hour++)data.push([hour,day,cells.get(`${day},${hour}`)||0]);
     const days=["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
-    $("heat-detail").hidden=!data.some(v=>v[2]>0);
+    $("heat-detail").hidden=!data.some(v=>v[2]>0);if($("heat-detail").hidden)return;
     // The heatmap reads a separate hourly block capped at 30 days (7 at least), so its window is stated.
     $("heat-sub").textContent=`tokens by weekday and hour · local time · last ${Math.round((activity.range.end-activity.range.start)/86400)} days`;
     heatChart=heatChart||AIUsage.init($("heat-chart"));
-    heatChart.setOption({grid:{left:4,right:4,top:4,bottom:4,containLabel:true},tooltip:{trigger:"item",formatter:p=>{const parts=Object.entries(split.get(`${p.value[1]},${p.value[0]}`)||{}).filter(([,v])=>v>0);return `${days[p.value[1]]} ${two(p.value[0])}:00 · ${F.full(p.value[2])} tokens${parts.map(([a,v])=>`<br><span style="color:${AIUsage.colorFor(agents[a])}">●</span> ${agents[a]} ${F.full(v)}`).join("")}`;}},
-      xAxis:{type:"category",data:Array.from({length:24},(_,h)=>two(h)),axisLine:{show:false},axisLabel:{interval:5}},yAxis:{type:"category",inverse:true,data:days,axisLine:{show:false}},
+    heatChart.setOption({grid:{left:4,right:4,top:4,bottom:4,containLabel:true},tooltip:{trigger:"item",formatter:p=>{const parts=Object.entries(split.get(`${p.value[1]},${p.value[0]}`)||{}).filter(([,v])=>v>0);return AIUsage.tipTitle(`${days[p.value[1]]} ${two(p.value[0])}:00`)+AIUsage.tipRow("Tokens",F.full(p.value[2]))+parts.map(([a,v])=>AIUsage.tipRow(agents[a],F.full(v),{color:agentColor(a)})).join("");}},
+      xAxis:{type:"category",data:Array.from({length:24},(_,h)=>two(h)),axisLine:{show:false},axisLabel:{interval:2}},yAxis:{type:"category",inverse:true,data:days,axisLine:{show:false},axisLabel:{color:css("--tm-text")}},
       visualMap:{show:false,min:0,max:Math.max(1,...data.map(v=>v[2]))},series:[{id:"heat",type:"heatmap",data}]});
   }
   function renderSpikes(summary,range) {
     const items=(datasets.get("all.spikes")?.details||[]).slice().sort((a,b)=>b.factor-a.factor).slice(0,4),weekday=new Intl.DateTimeFormat("en",{weekday:"short"});
     const now=chosen().map(a=>{const tokens=summary[a]?.total?.value,sessions=summary[a]?.sessions;
-      return `<div><span><span style="color:${AIUsage.colorFor(agents[a])}">●</span> ${agents[a]}</span><span class="${tokens?"num":"faint"}">${!tokens?"no activity":sessions?.value==null?"sessions not reported":`${F.full(sessions.value)} new sessions`}</span></div>`;}).join("");
-    $("spikes").innerHTML=`<div><h2>Usage spikes</h2><div class="sub">days above 2.5× the preceding 7-day average</div></div>
-      <div class="spikes">${items.map((v,i)=>{const d=new Date(v.time*1000);return `<div class="spike${i===0&&v.factor>=10?" top":""}"><span class="factor">×${v.factor.toFixed(1)}</span><div><span>${weekday.format(d)}, ${two(d.getDate())}.${two(d.getMonth()+1)}</span><span class="num" title="${F.full(v.tokens)} tokens">${F.tokens(v.tokens)} tokens</span></div></div>`;}).join("")||`<div class="note">No spikes in the daily data for this range.</div>`}</div>
-      <div class="agents-now"><div class="eyebrow">Agents in this range</div>${now}</div>`;
+      return `<div>${dot(agentColor(a),agents[a])}<span>${!tokens?"no activity":sessions?.value==null?"sessions not reported":`${F.full(sessions.value)} new sessions`}</span></div>`;}).join("");
+    $("spikes").innerHTML=panelHead("Usage spikes","days above 2.5× the preceding 7-day average")+`<div class="tm-panel__body">
+      ${items.length?`<div class="aiu-spikes">${items.map(v=>{const d=new Date(v.time*1000);return `<div class="aiu-spike"><span class="aiu-spike__factor">×${v.factor.toFixed(1)}</span><span>${weekday.format(d)}, ${two(d.getDate())}.${two(d.getMonth()+1)}</span><span class="aiu-spike__tokens">${tip(`${F.tokens(v.tokens)} tokens`,`${F.full(v.tokens)} tokens`,"aiu-tip-end")}</span></div>`;}).join("")}</div>`:`<p class="tm-meta">No spikes in the daily data for this range.</p>`}
+      <div class="aiu-now"><div class="tm-kpi__label">Agents in this range</div>${now}</div></div>`;
   }
   // ---- Agent details: shared comparison, then one panel per agent built from what it reports. ----
   let agentTab="codex";
@@ -569,11 +630,11 @@
     const first=Math.min(...points.filter(([,v])=>v>0).map(([t])=>t));
     if(!Number.isFinite(first))return "";
     const values=new Map(points),times=buckets(range).filter(t=>t>=first),max=Math.max(...times.map(t=>values.get(t)||0));
-    return `<div class="mini" aria-hidden="true">${times.map((t,i)=>`<span title="${timeLabel(t,range)}" style="height:${Math.max(values.get(t)?6:2,Math.round((values.get(t)||0)/max*100))}%;background:${values.get(t)?color:"var(--track)"};opacity:${i===times.length-1?1:.55}"></span>`).join("")}</div>
-      <div class="mini-axis" aria-hidden="true"><span>${timeLabel(times[0],range)}</span><span>${times.length>1?timeLabel(times[times.length-1],range):""}</span></div>`;
+    return `<div class="aiu-mini" aria-hidden="true">${times.map((t,i)=>`<span style="height:${Math.max(values.get(t)?6:2,Math.round((values.get(t)||0)/max*100))}%;background:${values.get(t)?color:"var(--aiu-track)"};opacity:${i===times.length-1?1:.6}"></span>`).join("")}</div>
+      <div class="aiu-mini-axis" aria-hidden="true"><span>${timeLabel(times[0],range)}</span><span>${times.length>1?timeLabel(times[times.length-1],range):""}</span></div>`;
   }
-  const metricCard=(label,value,note,body,title="")=>`<div class="card metric"><div class="eyebrow">${label}</div><div class="figure"><span class="kpi-value" title="${esc(title)}">${value}</span>${note?`<span class="note">${note}</span>`:""}</div>${body}</div>`;
-  function workCard(d,range) {
+  const metricCard=(label,value,note,body,full="")=>`<div class="tm-kpi"><div class="tm-kpi__label">${label}</div><div class="tm-kpi__value">${tip(value,full)}</div><div class="aiu-metric__note">${note||"&nbsp;"}</div>${body}</div>`;
+  function workCard(d,range,color) {
     // Turn time is grouped by local day, or by week/month when the range has too many days.
     const groups=new Map(),days=(range.end-range.start)/86400,unit=days<=14?"day":days<=120?"week":"month";
     for(const [t,v]of d.details.totalTimeline||[]){
@@ -583,23 +644,23 @@
     }
     const rows=[...groups].filter(([,v])=>v>0).sort(),max=Math.max(...rows.map(([,v])=>v),0),weekday=new Intl.DateTimeFormat("en",{weekday:"short"});
     const label=key=>{const [y,m,day]=key.split("-");return unit==="month"?`${m}.${y}`:`${unit==="week"?"wk ":weekday.format(new Date(+y,m-1,+day))+" "}${day}.${m}`;};
-    return `<div class="card"><div class="card-top"><div><h3>Agent working time</h3><span class="sub">Σ turn duration, including tools and waiting · by ${unit}</span></div><span class="kpi-value" style="font-size:28px" title="${F.full(Math.round(d.details.total_seconds))} s">${F.duration(d.details.total_seconds)}</span></div>
-      <div class="bars">${rows.map(([key,v])=>`<div class="work"><span>${label(key)}</span><div class="track" aria-hidden="true"><span style="width:${Math.max(1,v/max*100)}%;background:var(--codex)"></span></div><span class="num">${F.duration(v)}</span></div>`).join("")||`<div class="note">No completed turns in this range.</div>`}</div></div>`;
+    return `<article class="tm-panel">${panelHead("Agent working time",`Σ turn duration, including tools and waiting · by ${unit}`,`<span class="aiu-figure">${tip(F.duration(d.details.total_seconds),`${F.full(Math.round(d.details.total_seconds))} s`,"aiu-tip-end")}</span>`)}
+      <div class="tm-panel__body"><div class="aiu-bars">${rows.map(([key,v])=>`<div class="aiu-bar"><span>${label(key)}</span><div class="aiu-track" aria-hidden="true"><span style="width:${Math.max(1,v/max*100)}%;background:${color}"></span></div><span>${F.duration(v)}</span></div>`).join("")||`<p class="tm-meta">No completed turns in this range.</p>`}</div></div></article>`;
   }
   function toolsCard(d,color) {
     const ranking=d.details.ranking||[],calls=ranking.reduce((s,r)=>s+r.calls,0),failed=ranking.reduce((s,r)=>s+r.failed,0),max=ranking[0]?.calls||0;
-    const row=r=>`<div class="tool"><span title="${esc(r.tool)}">${esc(r.tool)}</span><div class="track" aria-hidden="true"><span style="width:${(r.calls-r.failed)/max*100}%;background:${color}"></span><span style="width:${r.failed?Math.max(1.2,r.failed/max*100):0}%;background:var(--warn)"></span></div><span class="num" title="${F.full(r.failed)} failed">${F.full(r.calls)}</span></div>`;
-    return `<div class="card"><div class="card-top"><div><h3>Tool calls</h3><span class="sub">${F.full(calls)} calls · ranking by tool</span></div>${calls?`<span class="ds-badge" data-tone="warning"><b class="num">${F.full(failed)}</b> failed · ${F.pct(failed/calls*100,2)}</span>`:""}</div>
-      <div class="bars" style="gap:10px">${ranking.slice(0,10).map(row).join("")}</div>
-      ${ranking.length>10?`<details class="more-tools"><summary class="note">${ranking.length-10} more ${ranking.length===11?"tool":"tools"}</summary><div class="bars" style="gap:10px">${ranking.slice(10).map(row).join("")}</div></details>`:""}${failed?`<div class="note faint">the yellow part of a bar is that tool's failed calls</div>`:""}</div>`;
+    const row=r=>`<div class="aiu-bar"><span>${tip(esc(r.tool),r.tool)}</span><div class="aiu-track" aria-hidden="true"><span style="width:${(r.calls-r.failed)/max*100}%;background:${color}"></span><span style="width:${r.failed?Math.max(1.2,r.failed/max*100):0}%;background:var(--tm-warning)"></span></div><span>${tip(F.full(r.calls),`${F.full(r.failed)} failed`,"aiu-tip-end")}</span></div>`;
+    return `<article class="tm-panel">${panelHead("Tool calls",`${F.full(calls)} calls · ranking by tool`,calls&&failed?`<span class="tm-badge tm-badge--warning">${F.full(failed)} failed · ${F.pct(failed/calls*100,2)}</span>`:"")}
+      <div class="tm-panel__body"><div class="aiu-bars">${ranking.slice(0,10).map(row).join("")}</div>
+      ${ranking.length>10?`<details class="aiu-more-tools"><summary class="tm-meta">${ranking.length-10} more ${ranking.length===11?"tool":"tools"}</summary><div class="aiu-bars">${ranking.slice(10).map(row).join("")}</div></details>`:""}${failed?`<p class="tm-meta aiu-note">${dot("var(--tm-warning)","the warning-colored part of a bar is that tool's failed calls")}</p>`:""}</div></article>`;
   }
-  /** Cards for every measurement this agent reports; returns placeholders for the empty state too. */
+  /** Tiles for every measurement this agent reports; returns placeholders for the empty state too. */
   function agentPanel(agent,summary,range) {
-    const color=AIUsage.colorFor(agents[agent]),small=[],wide=[],placeholders=[];let activity=["total","cost"].some(key=>summary[agent]?.[key]?.value>0);
+    const color=agentColor(agent),small=[],wide=[],placeholders=[];let activity=["total","cost"].some(key=>summary[agent]?.[key]?.value>0);
     // Histogram quantiles when the agent exports buckets; the Σsum/Σcount mean otherwise.
     const at=(d,q)=>`${d.details[q+"Capped"]?"≥ ":""}${F.duration(d.details[q])}`;
     for(const [m,label,hint]of LATENCY){const d=reported(agent,m);if(!d)continue;placeholders.push([label,hint||"median and p95"]);
-      if(d.details.p50!=null){activity=true;small.push(metricCard(label,at(d,"p50"),"p50",`<div class="note">p95 ${at(d,"p95")} · mean ${F.duration(d.total)}</div>`+miniBars(d.details.p50Timeline||[],range,color),`${F.full(Math.round(d.details.p50*1000))} ms`));}
+      if(d.details.p50!=null){activity=true;small.push(metricCard(label,at(d,"p50"),`p50 · p95 ${at(d,"p95")} · mean ${F.duration(d.total)}`,miniBars(d.details.p50Timeline||[],range,color),`${F.full(Math.round(d.details.p50*1000))} ms`));}
       else if(d.total!=null){activity=true;small.push(metricCard(label,F.duration(d.total),"average",miniBars(d.series[0]?.points||[],range,color),`${F.full(Math.round(d.total*1000))} ms`));}}
     for(const [m,label,hint]of COUNTS){const d=reported(agent,m);if(!d)continue;placeholders.push([label,hint]);
       const sum=total(d.details?.timeline);if(!sum)continue;activity=true;
@@ -608,32 +669,36 @@
       const failed=m==="tools"?total(d.details.failures):0;
       const note=m==="active"&&kinds.length?kinds.map(([k,v])=>`${esc(k)} ${F.duration(v)}`).join(" · "):m==="lines"?"added / removed":m==="tools"?`${F.full(failed)} failed`:"";
       small.push(metricCard(label,value,note,miniBars(d.details.timeline,range,color),m==="active"?`${F.full(Math.round(sum))} s`:F.full(sum)));}
-    const turn=reported(agent,"turnDuration");if(turn&&turn.details.total_seconds){activity=true;wide.push(workCard(turn,range));}
+    const turn=reported(agent,"turnDuration");if(turn&&turn.details.total_seconds){activity=true;wide.push(workCard(turn,range,color));}
     const tools=reported(agent,"tools");if(tools?.details.ranking?.length){activity=true;wide.push(toolsCard(tools,color));}
-    return {activity,count:placeholders.length,html:small.length||wide.length?`${small.length?`<div class="kpi-grid metrics">${small.join("")}</div>`:""}${wide.length?`<div class="row-2">${wide.join("")}</div>`:""}`:"",placeholders};
+    return {activity,count:placeholders.length,html:small.length||wide.length?`${small.length?`<div class="tm-cells aiu-metrics">${small.join("")}</div>`:""}${wide.length?`<div class="tm-panel-grid aiu-grid" data-cols="2">${wide.join("")}</div>`:""}`:"",placeholders};
   }
   function renderAgents(summary,range) {
     const sel=chosen(),both=sel.length>1;
     if(!sel.includes(agentTab))agentTab=sel[0];
     const panels=Object.fromEntries(sel.map(a=>[a,agentPanel(a,summary,range)])),agent=both?agentTab:sel[0],panel=panels[agent];
     const rows=[["Cost","cost",v=>F.cost(v),v=>F.cost(v,true)],["Tokens","total",F.tokens,F.full],["Cache hit","cacheHit",v=>F.pct(v*100),v=>F.pct(v*100,3)],["Output","output",F.tokens,F.full],["Reasoning","reasoning",F.tokens,F.full],["New sessions","sessions",F.full,F.full]];
-    const compare=both?`<section class="card" aria-label="Agent comparison"><div class="card-top"><h2>Comparison · shared metrics</h2><div class="legend">${sel.map(a=>`<span><span style="color:${AIUsage.colorFor(agents[a])}">●</span> ${agents[a]}</span>`).join("")}</div></div>
-      <div class="compare-rows" style="--agents:${sel.length}">${rows.map(([label,key,short,full])=>{const values=sel.map(a=>summary[a]?.[key]),max=Math.max(...values.map(v=>v?.value||0));
-        return `<div class="compare-row"><span>${label}</span>${sel.map((a,i)=>{const v=values[i],missing=v?.state==="unavailable"||v==null;const text=v?.value!=null?short(v.value):missing?"not reported":key==="cacheHit"?"—":short(0);
+    $("compare-region").hidden=!both;
+    if(both){
+      $("compare-legend").innerHTML=sel.map(a=>legendItem(agentColor(a),agents[a])).join("");
+      $("compare").innerHTML=rows.map(([label,key,short,full])=>{const values=sel.map(a=>summary[a]?.[key]),max=Math.max(...values.map(v=>v?.value||0));
+        return `<div class="aiu-compare__row" style="--agents:${sel.length}"><span>${label}</span>${sel.map((a,i)=>{const v=values[i],missing=v?.state==="unavailable"||v==null;const text=v?.value!=null?short(v.value):missing?"not reported":key==="cacheHit"?"—":short(0);
           const width=v?.value?key==="cacheHit"?v.value*100:v.value/max*100:0;
-          return `<div class="cell"><div class="track" aria-hidden="true"><span style="width:${width}%;background:${AIUsage.colorFor(agents[a])}"></span></div><span class="num${v?.value==null?" missing":""}" title="${v?.value!=null?full(v.value):""}">${text}</span></div>`;}).join("")}</div>`;}).join("")}</div></section>`:"";
+          return `<div class="aiu-compare__cell"><div class="aiu-track aiu-track--sm" aria-hidden="true"><span style="width:${width}%;background:${agentColor(a)}"></span></div><span class="${v?.value==null?"is-missing":""}">${v?.value!=null?tip(text,full(v.value),"aiu-tip-end"):text}</span></div>`;}).join("")}</div>`;}).join("");
+    }
     const lists=[...datasets.values()].filter(d=>d.agent===agent&&d.state!=="unavailable").map(d=>d.details?.timeline||d.details?.categories?.find(c=>c.id==="total")?.points||[]);
     const first=Math.min(...lists.flat().filter(([,v])=>v>0).map(([t])=>t)),days=Math.ceil((range.end-first)/86400);
-    const chip=!panel.activity?"no data in this range":Number.isFinite(first)&&first>range.start?`data since ${timeLabel(first,range)}${range.end-range.start>86400+range.step?` · axis trimmed to ${days} ${days===1?"day":"days"}`:""}`:"";
-    const tabs=both?`<div class="tabs" role="tablist" aria-label="Agent">${sel.map(a=>`<button type="button" role="tab" data-tab="${a}" aria-selected="${a===agent}" style="--tab-color:${AIUsage.colorFor(agents[a])}"><i style="background:${AIUsage.colorFor(agents[a])}"></i>${agents[a]} <span class="count">${panels[a].count} metrics</span></button>`).join("")}</div>`
-      :`<h2 class="agent-title"><i style="background:${AIUsage.colorFor(agents[agent])}"></i>${agents[agent]} · agent metrics</h2>`;
+    $("agent-meta").textContent=!panel.activity?"no data in this range":Number.isFinite(first)&&first>range.start?`data since ${timeLabel(first,range)}${range.end-range.start>86400+range.step?` · axis trimmed to ${days} ${days===1?"day":"days"}`:""}`:"";
+    $("agent-title").innerHTML=both?`<span class="tm-tabs" role="tablist" aria-label="Agent">${sel.map(a=>`<button type="button" class="tm-tab" role="tab" data-tab="${a}" aria-selected="${a===agent}" tabindex="${a===agent?0:-1}"><span class="aiu-tab-mark" style="--_c:${agentColor(a)}"></span>${agents[a]} <span class="aiu-tab-count">${panels[a].count} ${panels[a].count===1?"metric":"metrics"}</span></button>`).join("")}</span>`
+      :`<span class="aiu-tab-mark" style="--_c:${agentColor(agent)}"></span>${agents[agent]} · agent metrics`;
     const longer=["90d","180d","1y","all"].includes(selection.range)||CUSTOM.test(selection.range);
     const emptyTitle=panel.activity?`No ${agents[agent]} agent-specific metrics in this range`:`No ${agents[agent]} activity in this range`;
     const emptyNote=panel.activity?"Token usage or cost is available above. Timing, session and tool metrics are reported separately; none are available for the selected range and filters.":panel.placeholders.length?"When agent-specific metrics are reported for the selected range and filters, they appear here:":`${agents[agent]} reports no agent-specific metrics.`;
-    const body=panel.html||`<div class="card empty"><div><h3>${emptyTitle}</h3><p>${emptyNote}</p></div>
-      <div class="placeholders">${panel.placeholders.map(([label,hint])=>`<div><span class="eyebrow">${label}</span><span class="num">—</span><span>${hint}</span></div>`).join("")}</div>${longer?"":`<div><button type="button" class="link" data-goto="90d">Show the last 90 days</button></div>`}</div>`;
+    const body=panel.html||`<div class="tm-state aiu-state"><div class="tm-state__title">${emptyTitle}</div><div class="tm-state__body">${emptyNote}</div>
+      ${panel.placeholders.length?`<div class="aiu-placeholders">${panel.placeholders.map(([label,hint])=>`<div><span class="tm-kpi__label">${label}</span><span class="tm-mono">—</span><span>${hint}</span></div>`).join("")}</div>`:""}${longer?"":`<button type="button" class="tm-btn tm-btn--outline tm-btn--sm" data-goto="90d">Show the last 90 days</button>`}</div>`;
     const latency=LATENCY.map(([m])=>reported(agent,m)).filter(d=>d?.total!=null),quantiles=latency.some(d=>d.details.p50!=null);
-    $("agents").innerHTML=`${compare}<div class="agent-bar" role="${both?"":"group"}">${tabs}${chip?`<span class="chip">${chip}</span>`:""}</div><div ${both?`role="tabpanel"`:""} class="agents">${body}</div>${latency.length&&panel.activity?`<p class="note faint" style="margin:0">${quantiles?"Durations are p50 with p95 below, approximated from the histogram buckets; ≥ marks a value in the open top bucket. Bars show p50 per bucket.":"Durations are averages (Σ sum / Σ count) of the duration histograms."}</p>`:""}`;
+    $("agents").setAttribute("role",both?"tabpanel":"group");
+    $("agents").innerHTML=`${body}${latency.length&&panel.activity?`<p class="tm-meta aiu-agent-foot">${quantiles?"Durations are p50 with p95 beside it, approximated from the histogram buckets; ≥ marks a value in the open top bucket. Bars show p50 per bucket.":"Durations are averages (Σ sum / Σ count) of the duration histograms."}</p>`:""}`;
   }
   // ---- Per-model views. Categories and hit rates are Rust projections; the browser only picks and lays out. ----
   let modelKey="";
@@ -641,8 +706,8 @@
   const modelViews={tokens:{id:"model-tokens",table:false,spec:null,chart:null},hit:{id:"model-hit",table:false,spec:null,chart:null},effort:{id:"model-effort",table:false,spec:null,chart:null}};
   const PARTS=TYPES.filter(([id])=>id!=="reasoning");
   const pointsOf=(d,model,category)=>d.series.find(s=>s.dimensions.model===model&&s.dimensions.category===category)?.points||[];
-  const tip=(t,rows)=>`<div style="color:var(--muted);margin-bottom:4px">${new Date(t*1000).toLocaleString()}</div>${rows.join("")}`;
-  const tipRow=(left,right,faint)=>`<div style="display:flex;justify-content:space-between;gap:16px${faint?";color:var(--faint)":""}"><span>${left}</span><span style="font-family:var(--font-mono)">${right}</span></div>`;
+  const viewTip=(t,rows)=>AIUsage.tipTitle(new Date(t*1000).toLocaleString())+rows.join("");
+  const tipRow=(left,right,muted,color)=>AIUsage.tipRow(left,right,{muted,color,html:true});
   /** Bucket runs without any reported sample, drawn as shaded "no data" areas. */
   function missingAreas(times,seen,range){
     const runs=[];let run=null;
@@ -653,12 +718,12 @@
   function viewFrame(v,visible){
     const card=$(v.id);card.hidden=!visible;
     if(!visible){v.spec=null;return false;}
-    card.querySelector(".copy").hidden=!v.table;$(v.id+"-chart").hidden=v.table;v.tableHost=card.querySelector(".table-wrap");v.tableHost.hidden=!v.table;
+    card.querySelector(".copy").hidden=!v.table;$(v.id+"-chart").hidden=v.table;v.tableHost=card.querySelector(".aiu-table");v.tableHost.hidden=!v.table;
     if(v.table){renderTable(v);return false;}
     v.chart=v.chart||AIUsage.init($(v.id+"-chart"));
     return true;
   }
-  function renderModelViews(){renderModelTokens();renderModelHit();renderEffort();}
+  function renderModelViews(){renderModelTokens();renderModelHit();renderEffort();balanceAll();}
   function renderModelTokens(){
     const v=modelViews.tokens,list=[];
     for(const a of chosen()){const d=reported(a,"tokens");if(d)for(const m of d.details.models||[]){const n=total(m.points);if(n>0)list.push({key:`${a}|${m.id}`,agent:a,model:m.id,tokens:n,d});}}
@@ -681,23 +746,23 @@
     const times=buckets(range).filter(t=>t>=first),sum=total(v.spec.series.at(-1).points);
     const hit=(d.details.modelCacheHit||[]).find(m=>m.id===model);
     $("model-tokens-sub").textContent=`${bucketLabel(range.step)} · ${F.full(sum)} tokens${hit?` · cache hit ${F.pct(hit.hit*100)}`:""}`;
-    $("model-tokens-chips").innerHTML=first>range.start?`<span class="chip">data since ${timeLabel(first,range)}</span>`:"";
+    $("model-tokens-chips").innerHTML=first>range.start?`<span>data since ${timeLabel(first,range)}</span>`:"";
     const areas=missingAreas(times,seen,range);
     v.chart.setOption({
       grid:{left:8,right:8,top:16,bottom:36,containLabel:true},
       legend:{type:"scroll",left:"center",right:"auto",top:"auto",bottom:0},
       tooltip:{trigger:"axis",formatter:params=>{
         const t=params[0].value[0]/1000;
-        if(!seen(t))return tip(t,[`<span style="color:var(--faint)">no data reported</span>`]);
+        if(!seen(t))return viewTip(t,[tipRow("no data reported","",true)]);
         const all=PARTS.reduce((n,[id])=>n+(maps[id].get(t)||0),0);
         const rows=params.map(p=>{const id=PARTS.find(([,name])=>name===p.seriesName)?.[0],n=maps[id]?.get(t)||0;
-          return tipRow(`${p.marker}${p.seriesName}`,`${F.full(n)}${all?` · ${F.pct(n/all*100)}`:""}`)+(id==="output"&&agent==="codex"?tipRow("&nbsp;&nbsp;of which reasoning",F.full(maps.reasoning.get(t)||0),true):"");}).reverse();
-        return tip(t,[...rows,tipRow("<b>Total</b>",`<b>${F.full(maps.total.get(t)||0)}</b>${all?"":" · reported, no usage"}`)]);
+          return tipRow(esc(p.seriesName),`${F.full(n)}${all?` · ${F.pct(n/all*100)}`:""}`,false,p.color)+(id==="output"&&agent==="codex"?tipRow("of which reasoning",F.full(maps.reasoning.get(t)||0),true):"");}).reverse();
+        return viewTip(t,[...rows,tipRow("<b>Total</b>",`<b>${F.full(maps.total.get(t)||0)}</b>${all?"":" · reported, no usage"}`)]);
       }},
       xAxis:{type:"time",min:(times[0]-range.step/2)*1000,max:range.end*1000,axisLabel:{hideOverlap:true}},
       yAxis:{type:"value",minInterval:1,axisLabel:{formatter:F.tokens}},
       // Mutually exclusive categories stack to the model's tokens; reasoning stays inside output.
-      series:PARTS.map(([id,name,color],i)=>AIUsage.bar(name,times.map(t=>[t*1000,seen(t)?maps[id].get(t)||0:null]),name,{id,barMaxWidth:28,itemStyle:{color:getComputedStyle(document.documentElement).getPropertyValue(["cached","input","written"].includes(id)?`${color}-${agent}`:color).trim()},markArea:i===0?areas:undefined})),
+      series:PARTS.map(([id,name,color],i)=>AIUsage.bar(name,times.map(t=>[t*1000,seen(t)?maps[id].get(t)||0:null]),name,{id,barMaxWidth:28,itemStyle:{color:css(color)},markArea:i===0?areas:undefined})),
     },{replaceMerge:["series"]});
   }
   function renderModelHit(){
@@ -714,7 +779,7 @@
     const counts=new Map(rows.map(r=>[r.name,Object.fromEntries(["input","cached","written","total"].map(c=>[c,new Map(pointsOf(r.d,r.id,c))]))]));
     const overall=new Map(rows.map(r=>[r.name,r.hit]));
     $("model-hit-sub").textContent=`${bucketLabel(range.step)} · cached ÷ (uncached + cached + cache write) · gaps have no input`;
-    $("model-hit-chips").innerHTML=first>range.start?`<span class="chip">data since ${timeLabel(first,range)}</span>`:"";
+    $("model-hit-chips").innerHTML=first>range.start?`<span>data since ${timeLabel(first,range)}</span>`:"";
     v.chart.setOption({
       grid:{left:8,right:8,top:16,bottom:36,containLabel:true},
       legend:{type:"scroll",left:"center",right:"auto",top:"auto",bottom:0,formatter:name=>`${name}  ${F.pct(overall.get(name)*100)}`},
@@ -722,10 +787,10 @@
         const t=params[0].value[0]/1000;
         // Buckets with samples but no input say so; models without samples in the bucket are left out.
         const lines=params.map(p=>{const c=counts.get(p.seriesName);
-          if(p.value[1]==null)return c.total.has(t)?tipRow(`${p.marker}${esc(p.seriesName)}`,"no input tokens",true):"";
-          return tipRow(`${p.marker}${esc(p.seriesName)}`,`<b>${F.pct(p.value[1],2)}</b>`)+tipRow("&nbsp;&nbsp;cached · uncached · write",`${F.full(c.cached.get(t)||0)} · ${F.full(c.input.get(t)||0)} · ${F.full(c.written.get(t)||0)}`,true);
+          if(p.value[1]==null)return c.total.has(t)?tipRow(esc(p.seriesName),"no input tokens",true,p.color):"";
+          return tipRow(esc(p.seriesName),`<b>${F.pct(p.value[1],2)}</b>`,false,p.color)+tipRow("cached · uncached · write",`${F.full(c.cached.get(t)||0)} · ${F.full(c.input.get(t)||0)} · ${F.full(c.written.get(t)||0)}`,true);
         }).filter(Boolean);
-        return tip(t,lines.length?lines:[`<span style="color:var(--faint)">no data reported</span>`]);
+        return viewTip(t,lines.length?lines:[tipRow("no data reported","",true)]);
       }},
       xAxis:{type:"time",min:(times[0]-range.step/2)*1000,max:range.end*1000,axisLabel:{hideOverlap:true}},
       yAxis:{type:"value",min:0,max:100,interval:25,axisLabel:{formatter:v=>`${v}%`}},
@@ -740,7 +805,7 @@
     const n=parseInt(hex.replace("#",""),16),mix=c=>Math.round(f>0?c+(255-c)*f:c*(1+f));
     return "#"+[n>>16&255,n>>8&255,n&255].map(c=>mix(c).toString(16).padStart(2,"0")).join("");
   }
-  const effortColor=(agent,model,effort)=>{const i=EFFORTS.indexOf(effort);return i<0?getComputedStyle(document.documentElement).getPropertyValue("--tok-output").trim():shade(AIUsage.colorFor(`${agents[agent]} · ${model}`),EFFORT_SHADE[i]);};
+  const effortColor=(agent,model,effort)=>{const i=EFFORTS.indexOf(effort);return i<0?css("--tm-text-3"):shade(AIUsage.colorFor(`${agents[agent]} · ${model}`),EFFORT_SHADE[i]);};
   function renderEffort(){
     const v=modelViews.effort,sel=chosen(),rows=[];
     for(const a of sel){
@@ -755,7 +820,7 @@
     const range=rows[0].d.range,first=Math.min(...rows.flatMap(r=>r.points.filter(([,n])=>n>0).map(([t])=>t))),times=buckets(range).filter(t=>t>=first);
     const all=rows.reduce((n,r)=>n+total(r.points),0);
     $("model-effort-sub").textContent=`${bucketLabel(range.step)} · ${F.full(all)} tokens · reasoning effort of each response`;
-    $("model-effort-chips").innerHTML=first>range.start?`<span class="chip">data since ${timeLabel(first,range)}</span>`:"";
+    $("model-effort-chips").innerHTML=first>range.start?`<span>data since ${timeLabel(first,range)}</span>`:"";
     v.chart.setOption({
       grid:{left:8,right:8,top:16,bottom:36,containLabel:true},
       legend:{type:"scroll",left:"center",right:"auto",top:"auto",bottom:0},
@@ -766,8 +831,9 @@
     },{replaceMerge:["series"]});
   }
   async function copyCharts(button,specs,download=false) {
-    const id=snapshot,chosen=structuredClone(specs),scope={...selection},label=button.textContent;
-    if(!id){button.textContent="Waiting for snapshot";return;}
+    const id=snapshot,chosen=structuredClone(specs),scope={...selection};
+    if(!id){toast({tone:"info",title:download?"Export":"Copy",body:"Waiting for the first data snapshot."});return;}
+    button.setAttribute("aria-busy","true");
     try {
       const response=await fetch(`/api/dashboard/export?${new URLSearchParams({snapshot:id})}`),source=await response.json();if(!response.ok)throw Error(source.error||"Export failed");
       const shared={snapshot:id,selection:scope,freshness:source.freshness,queries:source.queries,warnings:source.warnings};
@@ -775,21 +841,21 @@
       if(download){
         const d=new Date(),stamp=`${d.getFullYear()}${two(d.getMonth()+1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}${two(d.getSeconds())}`;
         const link=el("a");link.href=URL.createObjectURL(new Blob([JSON.stringify({format:"ai-usage",version:1,...shared,charts})+"\n"],{type:"application/json"}));link.download=`ai-usage-${stamp}.json`;
-        link.click();setTimeout(()=>URL.revokeObjectURL(link.href),0);button.textContent="Exported";
+        link.click();setTimeout(()=>URL.revokeObjectURL(link.href),0);toast({tone:"success",title:"Exported",body:`${charts.length} charts saved to ${link.download}.`});
       }
-      else{await navigator.clipboard.writeText(JSON.stringify({...shared,...charts[0]},null,2));button.textContent="Copied";}
-    }catch(error){button.textContent=download?"Export failed":"Copy failed";button.title=error.message;}
-    setTimeout(()=>{button.textContent=label;},2200);
+      else{await navigator.clipboard.writeText(JSON.stringify({...shared,...charts[0]},null,2));toast({tone:"success",title:"Copied",body:`${charts[0].chart} data copied as JSON.`});}
+    }catch(error){toast({tone:"danger",title:download?"Export failed":"Copy failed",body:error.message,timeout:0});}
+    finally{button.removeAttribute("aria-busy");}
   }
   window.usage={initial,select,apply,custom,rangeLabel,restore(){theme();},debug(){return {epoch,snapshot,sourceAt,datasets,widgets,modelViews};}};
   document.addEventListener("DOMContentLoaded",()=>{
     for(const id of ["limit-events","limit-periods"]){$(id).checked=false;$(id).onchange=()=>{if(datasets.size)renderOverview();};}
-    theme();$("theme").onclick=()=>{currentTheme=currentTheme==="dark"?"light":"dark";try{localStorage.setItem("theme",currentTheme);}catch(_){}theme();};
+    theme();$("theme").onclick=()=>{const t=document.documentElement.dataset.tmTheme;theme(THEMES[(THEMES.indexOf(t)+1)%THEMES.length]);};
     $("export-all").onclick=()=>copyCharts($("export-all"),[...shareSpecs,...Object.values(modelViews).map(v=>v.spec).filter(Boolean),...[...widgets.values()].map(w=>w.spec)],true);
     $("model-pick").onchange=event=>{modelKey=event.target.value;try{localStorage.setItem("model",modelKey);}catch(_){}renderModelTokens();};
     for(const v of Object.values(modelViews)){
       const card=$(v.id),toggle=card.querySelector(".toggle"),copy=card.querySelector(".copy");
-      toggle.onclick=()=>{v.table=!v.table;toggle.textContent=v.table?"chart":"table";if(v===modelViews.tokens)renderModelTokens();else if(v===modelViews.hit)renderModelHit();else renderEffort();if(!v.table)v.chart?.resize();};
+      toggle.onclick=()=>{v.table=!v.table;toggle.setAttribute("aria-pressed",String(v.table));if(v===modelViews.tokens)renderModelTokens();else if(v===modelViews.hit)renderModelHit();else renderEffort();if(!v.table)v.chart?.resize();};
       copy.onclick=()=>{if(v.spec)copyCharts(copy,[v.spec]);};
     }
     for(const b of document.querySelectorAll("[data-scope-by]"))b.onclick=()=>{scopeBy=b.dataset.scopeBy;try{localStorage.setItem("scopeBy",scopeBy);}catch(_){}if(datasets.size)renderOverview();};
@@ -797,13 +863,20 @@
     document.addEventListener("keydown",event=>{if(event.key==="Escape")clearBrush();});
     for(const b of document.querySelectorAll("[data-share-metric]"))b.onclick=()=>{shareMetric=b.dataset.shareMetric;try{localStorage.setItem("shareMetric",shareMetric);}catch(_){}if(datasets.size)renderShare();};
     for(const b of document.querySelectorAll("[data-metric]"))b.onclick=()=>{metric=b.dataset.metric;try{localStorage.setItem("metric",metric);}catch(_){}if(datasets.size)renderOverview();};
-    $("agents").onclick=event=>{
+    $("agent-region").onclick=event=>{
       const tab=event.target.closest("[data-tab]"),goto=event.target.closest("[data-goto]");
-      if(tab){agentTab=tab.dataset.tab;try{localStorage.setItem("agentTab",agentTab);}catch(_){}renderOverview();}
+      if(tab){agentTab=tab.dataset.tab;try{localStorage.setItem("agentTab",agentTab);}catch(_){}renderOverview();$("agent-title").querySelector(`[data-tab="${agentTab}"]`)?.focus();}
       if(goto)$("range-"+goto.dataset.goto).click();
     };
-    $("raw-toggle").onclick=()=>{const show=$("raw").hidden;$("raw").hidden=!show;$("raw-toggle").setAttribute("aria-expanded",String(show));$("raw-toggle").textContent=`${show?"Hide":"Show"} raw charts (${widgets.size})`;if(show)$("raw").scrollIntoView({behavior:"smooth"});};
-    setInterval(()=>{if(lastPacket&&Date.now()-lastPacket>75000){$("updated").classList.add("stale");$("updated-dot").dataset.status="waiting";$("error").hidden=false;$("error").textContent="Live connection interrupted. Reconnecting…";}},15000);
+    // Arrow keys move between agent tabs (roving tabindex).
+    $("agent-title").onkeydown=event=>{
+      const tabs=[...$("agent-title").querySelectorAll("[data-tab]")],i=tabs.indexOf(event.target.closest("[data-tab]"));
+      if(i<0||!["ArrowLeft","ArrowRight"].includes(event.key))return;
+      event.preventDefault();tabs[(i+(event.key==="ArrowRight"?1:tabs.length-1))%tabs.length].click();
+    };
+    // Raw charts are drawn while the section is closed, so they are resized when it opens.
+    $("raw").ontoggle=()=>{if($("raw").open){widgets.forEach(w=>w.chart?.resize());balanceAll();}};
+    setInterval(()=>{if(lastPacket&&Date.now()-lastPacket>75000){$("updated-mark").dataset.state="pending";condition("connection","warning","Connection lost","Live connection interrupted. Reconnecting…");}},15000);
   });
   window.addEventListener("pagehide",()=>widgets.forEach(w=>w.chart?.dispose()));
 })();
