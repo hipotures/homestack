@@ -79,6 +79,18 @@
     const current=selection[id],wanted=["*",...new Set([...values,current].filter(v=>v!=="*"))];
     if(JSON.stringify([...target.options].map(o=>o.value))===JSON.stringify(wanted))return;
     target.replaceChildren(...wanted.map(value=>{const option=el("option","",value==="*"?label:value);option.value=value;option.selected=value===current;return option;}));
+    fitScopes();
+  }
+  // Scope lists fit the chosen value (CSS field-sizing); browsers without it get the same width from here.
+  const measure=document.createElement("canvas").getContext("2d");
+  function fitScopes(){
+    if(CSS.supports("field-sizing","content"))return;
+    for(const id of ["agent","host","project"]){
+      const sel=$(id),style=getComputedStyle(sel),text=sel.selectedOptions[0]?.textContent||"";
+      measure.font=`${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+      const edges=["paddingLeft","paddingRight","borderLeftWidth","borderRightWidth"].reduce((n,k)=>n+parseFloat(style[k]),0);
+      sel.style.width=`${Math.ceil(measure.measureText(text).width+edges)}px`;
+    }
   }
   function apply(packet) {
     if(packet.kind==="version") {
@@ -860,6 +872,8 @@
   window.usage={initial,select,apply,custom,rangeLabel,restore(){theme();},debug(){return {epoch,snapshot,sourceAt,datasets,widgets,modelViews};}};
   document.addEventListener("DOMContentLoaded",()=>{
     for(const id of ["limit-events","limit-periods"]){$(id).checked=false;$(id).onchange=()=>{if(datasets.size)renderOverview();};}
+    for(const id of ["agent","host","project"])$(id).addEventListener("change",fitScopes);
+    document.fonts.ready.then(fitScopes);
     theme();$("theme").onclick=()=>{const t=document.documentElement.dataset.tmTheme;theme(THEMES[(THEMES.indexOf(t)+1)%THEMES.length]);};
     $("export-all").onclick=()=>copyCharts($("export-all"),[...shareSpecs,...Object.values(modelViews).map(v=>v.spec).filter(Boolean),...[...widgets.values()].map(w=>w.spec)],true);
     $("model-pick").onchange=event=>{modelKey=event.target.value;try{localStorage.setItem("model",modelKey);}catch(_){}renderModelTokens();};
