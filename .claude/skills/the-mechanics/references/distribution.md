@@ -9,7 +9,7 @@ The Mechanics ships as **plain, compiled CSS** with no runtime JavaScript. Tailw
 **From a release (recommended).** Every release attaches `the-mechanics-css-<tag>.zip`, `the-mechanics-skill-<tag>.zip`, `SHA256SUMS` and `install.sh`. From the consuming project's root:
 
 ```sh
-curl -fsSL https://github.com/hipotures/the-mechanics/releases/latest/download/install.sh | sh -s -- --version v0.1.2 --css public/vendor/the-mechanics
+curl -fsSL https://github.com/hipotures/the-mechanics/releases/latest/download/install.sh | sh -s -- --version v0.1.5 --css public/vendor/the-mechanics
 ```
 
 This puts the files below into `--css` (default `vendor/the-mechanics`) and the agent skill into `.claude/skills/the-mechanics` (`--no-skill` to skip). Commit the vendored files in the consuming project so builds do not depend on GitHub. See `scripts/install.sh --help` for all options.
@@ -37,6 +37,7 @@ Source files (`src/the-mechanics/*.css`) are also importable directly by any bun
 - **Base styles:** opt-in via `class="tm-root"` on `<body>` or an app root. Nothing global is restyled without it except `--tm-*` variables on `:root`.
 - **Tokens:** every `--tm-*` custom property listed in `DESIGN.md §4` is public. Others (`--_bg`, `--_series`, …) are private.
 - **Components:** classes prefixed `tm-` with BEM-style elements (`tm-panel__head`) and modifiers (`tm-btn--primary`). State is expressed through native attributes: `disabled`, `aria-invalid`, `aria-busy`, `aria-pressed`, `aria-selected`, `aria-current`, `aria-sort`, `:checked`, `:indeterminate`, `[open]`, `:popover-open`.
+- **Input-modality hook (optional, recommended with scripted popups):** `data-tm-input="pointer" | "key"` on `<html>`, set from capturing `pointerdown` / `keydown` listeners (`trackInputModality()` in `src/playground/lib.js`). With it, popup items focused by script after a mouse action show no focus frame, and a select clicked open shows no lift. Without it, browsers may paint that focus as keyboard focus before the first click on the page.
 - **Overrides:** consumer CSS that is not in a layer always wins over the library; no `!important` needed.
 - **Behavior:** provided by native elements (`<dialog>`, `<details>`, `popover`, form controls). Small optional behaviors used in the playground (menu arrow keys, roving lists, toasts, chart tooltips, select fallback `enhanceSelects`, date/time picker `enhanceDateTime`, restorable alerts `dismissibleAlert`, clear buttons `enhanceClearable`, `data-tm-tip` tooltips `enhanceTips`, inline form validation `validateInline` / `setFieldError`) live in `src/playground/lib.js` and `charts.js` as references, not as part of the CSS contract.
 

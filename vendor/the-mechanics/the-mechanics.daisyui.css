@@ -1,0 +1,55 @@
+/*! The Mechanics 0.1.5 — daisyUI 5 bridge — CC0-1.0 — https://github.com/hipotures/the-mechanics */
+/*
+ * The Mechanics → daisyUI 5 bridge (optional).
+ *
+ * For applications that already use Tailwind CSS 4 + daisyUI 5: load this
+ * after The Mechanics tokens/themes and disable daisyUI's built-in themes
+ * (`@plugin "daisyui" { themes: false; }`). daisyUI components then render
+ * with The Mechanics colors and geometry in all three themes, because every
+ * daisyUI variable resolves to a `--tm-*` token at use time.
+ */
+@layer tm.themes {
+  :root,
+  [data-tm-theme] {
+    --color-base-100: var(--tm-surface);
+    --color-base-200: var(--tm-surface-alt);
+    --color-base-300: var(--tm-canvas);
+    --color-base-content: var(--tm-text);
+    --color-primary: var(--tm-accent);
+    --color-primary-content: var(--tm-accent-text);
+    --color-secondary: var(--tm-chart-1);
+    --color-secondary-content: var(--tm-surface);
+    --color-accent: var(--tm-chart-2);
+    --color-accent-content: var(--tm-surface);
+    --color-neutral: var(--tm-inverse);
+    --color-neutral-content: var(--tm-text-inverse);
+    --color-info: var(--tm-info);
+    --color-info-content: var(--tm-surface);
+    --color-success: var(--tm-success);
+    --color-success-content: var(--tm-surface);
+    --color-warning: var(--tm-warning);
+    --color-warning-content: var(--tm-surface);
+    --color-error: var(--tm-danger);
+    --color-error-content: var(--tm-surface);
+    --radius-selector: var(--tm-radius-1);
+    --radius-field: var(--tm-radius-1);
+    --radius-box: var(--tm-radius-0);
+    --size-selector: 0.25rem;
+    --size-field: 0.25rem;
+    --border: 1px;
+    --depth: 0;
+    --noise: 0;
+  }
+}
+
+/* daisyUI derives the toggle and range rounding from --radius-selector plus
+   its own padding, which ends up at ~6px; keep them square like ours.
+   Unlayered so it wins over daisyUI's components layer. */
+.d-toggle,
+.d-toggle::before,
+.d-range {
+  border-radius: var(--tm-radius-1);
+}
+.d-range::-webkit-slider-thumb { border-radius: var(--tm-radius-1); }
+.d-range::-moz-range-thumb { border-radius: var(--tm-radius-1); }
+

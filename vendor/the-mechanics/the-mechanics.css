@@ -1,4 +1,4 @@
-/*! The Mechanics 0.1.2 — design system — CC0-1.0 — https://github.com/hipotures/the-mechanics */
+/*! The Mechanics 0.1.5 — design system — CC0-1.0 — https://github.com/hipotures/the-mechanics */
 /*
  * The Mechanics — public CSS entry.
  * Layer order: tokens < themes < base < components. Unlayered consumer CSS
@@ -1432,6 +1432,24 @@
   }
   .tm-btn--icon.tm-btn--sm { width: var(--tm-control-sm); }
   .tm-btn--icon.tm-btn--lg { width: var(--tm-control-lg); }
+  /* "Opens a list below": one caret for everything that drops a list —
+     the same solid 10x5 triangle the select draws, in the same color.
+     Chevrons are for navigation (back / next) and in-place expansion. */
+  .tm-caret {
+    display: inline-block;
+    flex: none;
+    width: 10px;
+    height: 5px;
+    background: var(--tm-text-2);
+    clip-path: polygon(0 0, 100% 0, 50% 100%);
+  }
+  .tm-btn--primary .tm-caret,
+  .tm-btn--danger .tm-caret {
+    background: currentColor;
+  }
+  .tm-btn:disabled .tm-caret {
+    background: currentColor;
+  }
   .tm-btn--wrap {
     white-space: normal;
     text-align: left;
@@ -2890,6 +2908,7 @@
     display: flex;
     align-items: center;
     gap: var(--tm-space-2);
+    user-select: none; /* a drag across a menu or option list never selects its text */
     width: 100%;
     min-height: var(--tm-control-sm);
     padding: 0 var(--tm-select-pad);
@@ -4411,6 +4430,26 @@
   .tm-stepper__btn:focus-visible,
   .tm-input-group > .tm-picker-field__btn:focus-visible {
     background: var(--tm-press);
+  }
+
+  /* Pointer sessions (optional hook: `data-tm-input="pointer" | "key"` on
+     <html>, kept by the reference helper trackInputModality). Popups move
+     focus in script when they open (the selected option, the first menu
+     item, today's cell), and browsers guess whether to paint that as
+     keyboard focus — typically yes before the first click on the page, no
+     after. With the hook, a list opened with the mouse shows no focus frame
+     and a select clicked open shows no lift; the first key press brings
+     both back. Without the hook nothing changes. */
+  :root[data-tm-input="pointer"] :is(.tm-menu__item, .tm-picker__cell):focus-visible {
+    border-color: transparent;
+  }
+  :root[data-tm-input="pointer"] :is(.tm-menu__item, .tm-picker__cell):is([aria-selected="true"], [aria-checked="true"], [aria-current="true"]):focus-visible {
+    border-color: var(--tm-select-frame);
+  }
+  :root[data-tm-input="pointer"] :is(.tm-select, .tm-root select:not([class])):focus-visible {
+    outline: 0;
+    border-color: var(--tm-ink);
+    box-shadow: none;
   }
 
   /* Text selection inside fields uses the selection colors instead of the

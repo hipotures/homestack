@@ -55,6 +55,7 @@ Test for anything new: *choice among siblings* → selection fill; *own on/off s
 - Composite controls (stepper, input group with affixes, date/time field, multi-select, drop zone) lift as one piece; the focused part inside is marked with the press tint `--tm-press`, never with a second frame.
 - Pickable items: ink frame on the block (item grammar). Tabs, accordion summaries, charts and links: 2px ink outline.
 - Never a blue/teal ring, never two different focus looks on one screen. Do not move focus programmatically into a text field after a mouse action (text fields always show focus).
+- Popups that move focus when they open (select list, menu, picker) must look the same opened by mouse the first time and every later time. Browsers paint scripted focus as keyboard focus before the first click on a page, so keep the input-modality hook: `data-tm-input="pointer"|"key"` on `<html>` (reference `trackInputModality()` in `lib.js`, or the same few lines in the app). With it, a mouse-opened list shows the selection fill but no focus frame, and the first key press brings the frame back.
 
 ## 6. Status, alerts, feedback (§2, §5)
 - Standalone status → `.tm-status` plate (`--sm` in panel heads and overlays) with a `.tm-mark` (`data-state`: complete, active, info, review, warning, error, pending, skipped, none). Inline status in rows/cells/text → `.tm-badge` with its marker shape. Never color alone.
@@ -83,6 +84,7 @@ Test for anything new: *choice among siblings* → selection fill; *own on/off s
 - Native number spinners are hidden; use `.tm-stepper`. Native date/time popups are replaced by `.tm-picker` (Monday-first, 24h, no weekend colors).
 - Text/search/email/url/tel fields get a clear ✕ (`.tm-input-clear`) while they hold text: space reserved, "Clear" tooltip, click clears and keeps focus, Escape clears search. Not on number/date/code/read-only/disabled fields, nor where a cancel ✕ already exists.
 - Selects: styled option list (base-select or scripted fallback), no tick, option text aligned with the closed field.
+- One caret for "opens a list below": a menu button ("More", "Actions") ends with `.tm-caret`, the select's own solid triangle in the same color — never a stroked chevron icon. Why: side by side, two different down-arrows read as two systems. Chevrons stay for back/next and in-place expansion.
 
 ## 8. Tables and selection (§5)
 - Compact = one line per record (details in tooltip); Comfortable = full detail. The toggle must make a visible difference.

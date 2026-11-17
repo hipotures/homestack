@@ -97,6 +97,9 @@ Several panels side by side: `.tm-panel-grid` (cells share the outer frame, 2px 
 <button class="tm-btn tm-btn--danger-outline">[icon]Deactivate</button>
 <button class="tm-btn tm-btn--primary" aria-busy="true">Saving</button>
 
+<!-- opens a menu: the select's caret, not a chevron icon -->
+<button class="tm-btn tm-btn--outline" popovertarget="more-menu">More<span class="tm-caret" aria-hidden="true"></span></button>
+
 <!-- on/off: fixed label, ink fill when on -->
 <button class="tm-btn tm-btn--sm tm-btn--outline tm-btn--toggle" aria-pressed="false">[icon filter]Selected only</button>
 

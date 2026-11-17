@@ -30,8 +30,10 @@ function enhanceSelects(root = document) {
   root.querySelectorAll("select.tm-select:not([data-tm-enhanced])").forEach((sel) => {
     sel.dataset.tmEnhanced = "1";
     let list = null;
+    let dismiss = null;
     const close = (focus = true) => {
       if (!list) return;
+      dismiss?.(); dismiss = null;
       list.remove();
       list = null;
       sel.setAttribute("aria-expanded", "false");
@@ -84,11 +86,17 @@ function enhanceSelects(root = document) {
           next?.focus();
         }
       });
-      // Light dismiss: pointer outside the list or scrolling closes it.
+      // Light dismiss: a pointer outside the list or a page scroll closes it; scrolling the list itself does not.
       setTimeout(() => {
-        const away = (e) => { if (list && !list.contains(e.target) && e.target !== sel) { close(false); document.removeEventListener("pointerdown", away, true); } };
+        if (!list) return;
+        const away = (e) => { if (list && !list.contains(e.target) && e.target !== sel) close(false); };
+        const scrolled = (e) => { if (list && !list.contains(e.target)) close(false); };
         document.addEventListener("pointerdown", away, true);
-        window.addEventListener("scroll", () => close(false), { once: true, capture: true, passive: true });
+        window.addEventListener("scroll", scrolled, { capture: true, passive: true });
+        dismiss = () => {
+          document.removeEventListener("pointerdown", away, true);
+          window.removeEventListener("scroll", scrolled, { capture: true });
+        };
       });
     };
     sel.setAttribute("aria-haspopup", "listbox");
@@ -107,5 +115,13 @@ function enhanceSelects(root = document) {
     });
   });
 }
+// Input modality (The Mechanics v0.1.5): lists opened by mouse show only the selection fill;
+// the first navigation key brings the keyboard focus frame back.
+(function trackInputModality() {
+  const root = document.documentElement;
+  const set = (v) => { if (root.dataset.tmInput !== v) root.dataset.tmInput = v; };
+  document.addEventListener("pointerdown", () => set("pointer"), true);
+  document.addEventListener("keydown", (e) => { if (!["Shift", "Control", "Alt", "Meta"].includes(e.key)) set("key"); }, true);
+})();
 document.addEventListener('DOMContentLoaded', () => enhanceSelects(document));
 })();
