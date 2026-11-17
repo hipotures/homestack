@@ -237,5 +237,3 @@ p { margin: 0; }
 .aa-toast__to { display: block; padding: 0; border: 0; background: none; font-family: inherit; font-size: inherit; line-height: inherit; color: inherit; text-align: left; cursor: pointer; }
 .aa-toast__to:hover { text-decoration: underline; text-underline-offset: 0.2em; }
 .aa-toast__to:focus-visible { outline: 0; box-shadow: var(--tm-focus-lift); }
-/* Header buttons take the field fill, like the other controls on the page. */
-:is(#theme, #add) { --_bg: var(--tm-inset); }

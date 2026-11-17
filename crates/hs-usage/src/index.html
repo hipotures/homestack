@@ -16,7 +16,7 @@
 <script defer src="/assets/echarts-6.1.0.min.js?v=__HOMESTACK_USAGE_VERSION__"></script>
 <script defer src="/assets/aiusage-echarts-theme.js?v=__HOMESTACK_USAGE_VERSION__"></script>
 <script defer src="/assets/dashboard.js?v=__HOMESTACK_USAGE_VERSION__"></script>
-<script defer src="/assets/tm-select.js?v=__HOMESTACK_USAGE_VERSION__"></script>
+<script defer src="/assets/tm-controls.js?v=__HOMESTACK_USAGE_VERSION__"></script>
 <script type="module" src="/assets/datastar-1.0.4.js?v=__HOMESTACK_USAGE_VERSION__"></script>
 </head><body class="tm-root">
 <main class="aiu-main" data-signals="window.usage.initial()"
@@ -28,7 +28,7 @@
 <p class="aiu-live" id="updated" aria-live="polite"><span class="tm-mark" id="updated-mark" data-state="pending" aria-hidden="true"></span><span id="updated-text">connecting…</span></p>
 </div>
 <div class="aiu-controls" role="group" aria-label="Dashboard filters">
-<div class="aiu-range" data-on:click__outside="$_more=false" data-on:keydown__window="evt.key==='Escape'&&($_more=false)">
+<div class="aiu-range" data-on:click__outside="!evt.target.closest('.tm-picker')&&($_more=false)" data-on:keydown__window="evt.key==='Escape'&&!evt.defaultPrevented&&($_more=false)">
 <div class="tm-segmented" role="group" aria-label="Time range">
 <button type="button" class="tm-segmented__option" data-on:click="$range='1h'" data-attr:aria-pressed="String($range==='1h')">1h</button>
 <button type="button" class="tm-segmented__option" data-on:click="$range='24h'" data-attr:aria-pressed="String($range==='24h')">24h</button>
@@ -180,7 +180,7 @@
 <div class="tm-collapsible__body"><div class="tm-panel-grid aiu-grid aiu-raw-grid" data-cols="2" id="cards" data-ignore></div></div>
 </details>
 
-<footer class="aiu-foot tm-meta"><span>AI Usage __HOMESTACK_USAGE_VERSION__ · Datastar 1.0.4 · Apache ECharts 6.1.0 · The Mechanics 0.1.6</span><span class="aiu-foot__links"><a href="/assets/datastar-LICENSE.md">Datastar license</a><a href="/assets/echarts-LICENSE.txt">ECharts license</a><a href="/assets/echarts-NOTICE.txt">Notices</a><span class="tm-tip aiu-tip-end"><button class="tm-btn tm-btn--ghost tm-btn--sm" id="export-all" type="button">Export all data</button><span class="tm-tip__bubble" aria-hidden="true">Download the data of every chart as a JSON file, with shared queries stored once and chart time boundaries</span></span></span></footer>
+<footer class="aiu-foot tm-meta"><span>AI Usage __HOMESTACK_USAGE_VERSION__ · Datastar 1.0.4 · Apache ECharts 6.1.0 · The Mechanics 0.1.8</span><span class="aiu-foot__links"><a href="/assets/datastar-LICENSE.md">Datastar license</a><a href="/assets/echarts-LICENSE.txt">ECharts license</a><a href="/assets/echarts-NOTICE.txt">Notices</a><span class="tm-tip aiu-tip-end"><button class="tm-btn tm-btn--ghost tm-btn--sm" id="export-all" type="button">Export all data</button><span class="tm-tip__bubble" aria-hidden="true">Download the data of every chart as a JSON file, with shared queries stored once and chart time boundaries</span></span></span></footer>
 </main>
 <dialog class="tm-dialog aiu-table-dialog" id="table-dialog" aria-labelledby="table-title">
 <div class="tm-dialog__head"><div class="aiu-dialog-heading"><h2 class="tm-dialog__title" id="table-title">Data</h2><p class="tm-meta" id="table-sub"></p></div>

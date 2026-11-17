@@ -244,7 +244,7 @@ async fn asset(Path(name): Path<String>, headers: HeaderMap) -> Response {
             include_bytes!("../assets/echarts-6.1.0.min.js.gz"),
         ),
         "dashboard.js" => (include_bytes!("../assets/dashboard.js"), &[]),
-        "tm-select.js" => (include_bytes!("../../../web/the-mechanics/tm-select.js"), &[]),
+        "tm-controls.js" => (include_bytes!("../../../web/the-mechanics/tm-controls.js"), &[]),
         "favicon.ico" => (include_bytes!("../assets/favicon.ico"), &[]),
         "favicon-32.png" => (include_bytes!("../assets/favicon-32.png"), &[]),
         "favicon-180.png" => (include_bytes!("../assets/favicon-180.png"), &[]),
