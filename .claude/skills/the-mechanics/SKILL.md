@@ -44,7 +44,7 @@ The most common failure is translating the old page element by element into stro
 
 Read `references/rules.md` for the reasoning and edge cases. In short:
 
-- **Structure:** free-standing objects (panels, tables, menus, dialogs, controls) get a **2px ink frame**; dividers that split a container are 2px ink; lines that touch other lines are thin. No rounded cards (radius ≤ 3px), no pills, no soft shadows on panels, **no colored side bars** anywhere.
+- **Structure:** free-standing objects (panels, tables, menus, dialogs, controls) get a **2px ink frame**; dividers between separate objects in one container (panel grid, KPI tiles, product cards, pipeline stages) are 2px ink; dividers between the options of **one control** (segmented control, joined button group) are 1px ink — test: several things, or several values of one thing?; lines that touch other lines are thin. No rounded cards (radius ≤ 3px), no pills, no soft shadows on panels, **no colored side bars** anywhere.
 - **Three-level hierarchy:** region > panel > record. A nested header never competes with its parent.
 - **One item grammar** for everything pickable (nav, in-page nav, list rows, menu/select options, palette results, picker cells): hover = grey block; selected = **selection fill only** (no frame, no tick); keyboard focus = the block's frame in ink. Geometry never changes between states.
 - **Two "on" signals, never swapped:** *chosen among siblings* → **selection fill** (green/olive/copper: nav item, segmented option, category chip, selected row, the bulk bar). *A control's own on-state* → **ink fill** (checked checkbox, switch, count badge, `.tm-btn--toggle`, `.tm-meta-toggle`). Ink, because controls often sit inside a selected area and green on green would vanish.

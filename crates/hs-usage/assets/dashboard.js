@@ -205,31 +205,25 @@
       else if([...w.spec.sourceIds,...spec.sourceIds].some(id=>dirty.has(id))){w.spec=spec;draw(w);}
     }
     $("raw-count").textContent=String(widgets.size);
+    if($("table-dialog").open){const host=$("table-host"),y=host.scrollTop,x=host.scrollLeft;if(refreshTable())host.scrollTo(x,y);else $("table-dialog").close();}
   }
-  const COPY_ICON='<svg class="tm-icon tm-icon--sm" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 5.5h8v8h-8zM2.5 10.5v-8h8"/></svg>';
   function create(spec) {
     const card=el("article","tm-panel"),head=el("header","tm-panel__head tm-panel__head--rich"),heading=el("div","tm-panel__heading"),actions=el("div","tm-panel__actions"),body=el("div","tm-panel__body");
-    const toggle=el("button","tm-btn tm-btn--outline tm-btn--sm tm-btn--toggle","Table"),copy=el("button","tm-btn tm-btn--ghost tm-btn--icon tm-btn--sm"),note=el("div","tm-chart-readout aiu-readout"),chartHost=el("div","tm-chart aiu-chart"),tableHost=el("div","tm-table-wrap aiu-table");
+    const open=el("button","tm-btn tm-btn--outline tm-btn--sm","Table"),note=el("div","tm-chart-readout aiu-readout"),chartHost=el("div","tm-chart aiu-chart");
     card.id="widget-"+spec.id;chartHost.id="chart-"+spec.id;chartHost.setAttribute("data-ignore-morph","");chartHost.setAttribute("role","img");chartHost.setAttribute("aria-label",spec.title);
-    copy.type=toggle.type="button";copy.hidden=true;copy.innerHTML=COPY_ICON;copy.setAttribute("aria-label","Copy data as JSON");toggle.setAttribute("aria-pressed","false");
-    tableHost.tabIndex=0;tableHost.setAttribute("role","region");tableHost.setAttribute("aria-label",spec.title+" data");
-    heading.append(el("h3","tm-panel__title",spec.title),el("span","tm-panel__subtitle",spec.unit));actions.append(copy,toggle);head.append(heading,actions);
-    body.append(note,chartHost,tableHost);card.append(head,body);$("cards").append(card);tableHost.hidden=true;
-    const w={card,head,note,copy,host:chartHost,tableHost,table:false,spec,chart:null,updates:0};
-    toggle.onclick=()=>{w.table=!w.table;toggle.setAttribute("aria-pressed",String(w.table));draw(w);if(!w.table)w.chart?.resize();};
-    copy.onclick=()=>copyCharts(copy,[w.spec]);
+    open.type="button";open.setAttribute("aria-haspopup","dialog");
+    heading.append(el("h3","tm-panel__title",spec.title),el("span","tm-panel__subtitle",spec.unit));actions.append(open);head.append(heading,actions);
+    body.append(note,chartHost);card.append(head,body);$("cards").append(card);
+    const w={card,head,note,host:chartHost,spec,chart:null,updates:0};
+    open.onclick=()=>openTable(()=>w.spec);
     return w;
   }
   function draw(w) {
     const spec=w.spec;
-    w.copy.hidden=!w.table;
     const timeRange=datasets.get(spec.series[0]?.dataset)?.range;
     // The time axis starts at the first bucket with data; a chip tells when that is later than the range.
     const first=firstData(spec.series),since=!spec.heat&&timeRange&&first>timeRange.start?first:null;
     w.note.replaceChildren(...[since?`data since ${sinceLabel(since,timeRange)}`:null,spec.note].filter(Boolean).map(n=>el("span","",n)));
-    w.host.hidden=w.table;
-    w.tableHost.hidden=!w.table;
-    if(w.table){renderTable(w);return;}
     if(!w.chart)w.chart=AIUsage.init(w.host);
     let option;
     if(spec.heat) {
@@ -246,6 +240,20 @@
   const seriesColor=s=>AIUsage.colorFor(s.label?.includes(" · ")?s.label:agents[s.agent]||s.label||s.id);
   const firstData=series=>Math.min(...series.flatMap(s=>s.points.filter(([,v])=>v>0).map(([t])=>t)));
   const sinceLabel=(t,range)=>{const d=new Date(t*1000),two=n=>String(n).padStart(2,"0");return range.end-range.start<=86400+range.step?`${two(d.getHours())}:${two(d.getMinutes())}`:`${two(d.getDate())}.${two(d.getMonth()+1)}`;};
+  /** The data table of a chart opens in a modal, wide enough for every column; it follows live updates while open. */
+  let tableSource=null;
+  function openTable(source){
+    tableSource=source;
+    if(!refreshTable())return;
+    $("table-dialog").showModal();$("table-host").scrollTo(0,0);
+  }
+  function refreshTable(){
+    const spec=tableSource?.();
+    if(!spec)return false;
+    $("table-title").textContent=spec.title;$("table-sub").textContent=`${spec.unit} · newest bucket first`;
+    renderTable({spec,tableHost:$("table-host")});
+    return true;
+  }
   function renderTable(w) {
     // Series names break only after the agent ("Claude Code ·"), after the model family ("claude-") or between label words.
     // Pieces are [text, separator]: a hyphen break adds no space, a word break keeps one.
@@ -725,7 +733,7 @@
   // ---- Per-model views. Categories and hit rates are Rust projections; the browser only picks and lays out. ----
   let modelKey="";
   try{modelKey=localStorage.getItem("model")||"";}catch(_){}
-  const modelViews={tokens:{id:"model-tokens",table:false,spec:null,chart:null},hit:{id:"model-hit",table:false,spec:null,chart:null},effort:{id:"model-effort",table:false,spec:null,chart:null}};
+  const modelViews={tokens:{id:"model-tokens",spec:null,chart:null},hit:{id:"model-hit",spec:null,chart:null},effort:{id:"model-effort",spec:null,chart:null}};
   const PARTS=TYPES.filter(([id])=>id!=="reasoning");
   const pointsOf=(d,model,category)=>d.series.find(s=>s.dimensions.model===model&&s.dimensions.category===category)?.points||[];
   const viewTip=(t,rows)=>AIUsage.tipTitle(F.when(t*1000))+rows.join("");
@@ -740,8 +748,6 @@
   function viewFrame(v,visible){
     const card=$(v.id);card.hidden=!visible;
     if(!visible){v.spec=null;return false;}
-    card.querySelector(".copy").hidden=!v.table;$(v.id+"-chart").hidden=v.table;v.tableHost=card.querySelector(".aiu-table");v.tableHost.hidden=!v.table;
-    if(v.table){renderTable(v);return false;}
     v.chart=v.chart||AIUsage.init($(v.id+"-chart"));
     return true;
   }
@@ -755,7 +761,7 @@
     if(list.length&&JSON.stringify([...pick.options].map(o=>o.value))!==JSON.stringify(list.map(m=>m.key)))
       pick.replaceChildren(...list.map(m=>{const o=el("option","",m.model||"?");o.value=m.key;return o;}));
     if(current)pick.value=current.key;
-    // The table/export spec is built before the frame so a table view and Export all stay current.
+    // The table/export spec is built before the frame so the table dialog and Export all stay current.
     if(current){
       const {d,agent,model}=current,codex=agent==="codex";
       v.spec={title:`Model tokens · ${agents[agent]} · ${model||"?"}`,unit:"tokens",export:{agent,model},
@@ -881,9 +887,15 @@
     $("export-all").onclick=()=>copyCharts($("export-all"),[...shareSpecs,...Object.values(modelViews).map(v=>v.spec).filter(Boolean),...[...widgets.values()].map(w=>w.spec)],true);
     $("model-pick").onchange=event=>{modelKey=event.target.value;try{localStorage.setItem("model",modelKey);}catch(_){}renderModelTokens();};
     for(const v of Object.values(modelViews)){
-      const card=$(v.id),toggle=card.querySelector(".toggle"),copy=card.querySelector(".copy");
-      toggle.onclick=()=>{v.table=!v.table;toggle.setAttribute("aria-pressed",String(v.table));if(v===modelViews.tokens)renderModelTokens();else if(v===modelViews.hit)renderModelHit();else renderEffort();if(!v.table)v.chart?.resize();};
-      copy.onclick=()=>{if(v.spec)copyCharts(copy,[v.spec]);};
+      $(v.id).querySelector(".table-open").onclick=()=>openTable(()=>v.spec);
+    }
+    {
+      const dialog=$("table-dialog");
+      for(const b of dialog.querySelectorAll("[data-close]"))b.onclick=()=>dialog.close();
+      // A click on the dimmed backdrop (outside the dialog box) closes it, like Escape.
+      dialog.addEventListener("click",event=>{if(event.target===dialog)dialog.close();});
+      dialog.addEventListener("close",()=>{tableSource=null;$("table-host").replaceChildren();});
+      $("table-copy").onclick=()=>{const spec=tableSource?.();if(spec)copyCharts($("table-copy"),[spec]);};
     }
     for(const b of document.querySelectorAll("[data-scope-by]"))b.onclick=()=>{scopeBy=b.dataset.scopeBy;try{localStorage.setItem("scopeBy",scopeBy);}catch(_){}if(datasets.size)renderOverview();};
     $("trend-chips").onclick=event=>{if(event.target.closest("#brush-clear"))clearBrush();};

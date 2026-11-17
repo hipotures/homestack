@@ -108,34 +108,31 @@
 <article class="tm-panel aiu-view" id="model-tokens" aria-labelledby="model-tokens-title" hidden>
 <header class="tm-panel__head tm-panel__head--rich">
 <div class="tm-panel__heading"><h3 class="tm-panel__title" id="model-tokens-title">Model tokens over time</h3><span class="tm-panel__subtitle" id="model-tokens-sub"></span></div>
-<div class="tm-panel__actions"><select class="tm-select" id="model-pick" aria-label="Model"></select><span class="aiu-view-tools"><button class="tm-btn tm-btn--ghost tm-btn--icon tm-btn--sm copy" type="button" hidden aria-label="Copy data as JSON"><svg class="tm-icon tm-icon--sm" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 5.5h8v8h-8zM2.5 10.5v-8h8"/></svg></button><button class="tm-btn tm-btn--outline tm-btn--sm tm-btn--toggle toggle" type="button" aria-pressed="false">Table</button></span></div>
+<div class="tm-panel__actions"><select class="tm-select" id="model-pick" aria-label="Model"></select><button class="tm-btn tm-btn--outline tm-btn--sm table-open" type="button" aria-haspopup="dialog">Table</button></div>
 </header>
 <div class="tm-panel__body">
 <div class="tm-chart-readout aiu-readout" id="model-tokens-chips"></div>
 <div class="tm-chart aiu-chart" id="model-tokens-chart" role="img" aria-label="Token categories of the selected model, stacked per bucket"></div>
-<div class="tm-table-wrap aiu-table" hidden tabindex="0" role="region" aria-label="Model tokens data"></div>
 </div>
 </article>
 <article class="tm-panel aiu-view" id="model-hit" aria-labelledby="model-hit-title" hidden>
 <header class="tm-panel__head tm-panel__head--rich">
 <div class="tm-panel__heading"><h3 class="tm-panel__title" id="model-hit-title">Cache hit by model</h3><span class="tm-panel__subtitle" id="model-hit-sub"></span></div>
-<div class="tm-panel__actions"><span class="aiu-view-tools"><button class="tm-btn tm-btn--ghost tm-btn--icon tm-btn--sm copy" type="button" hidden aria-label="Copy data as JSON"><svg class="tm-icon tm-icon--sm" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 5.5h8v8h-8zM2.5 10.5v-8h8"/></svg></button><button class="tm-btn tm-btn--outline tm-btn--sm tm-btn--toggle toggle" type="button" aria-pressed="false">Table</button></span></div>
+<div class="tm-panel__actions"><button class="tm-btn tm-btn--outline tm-btn--sm table-open" type="button" aria-haspopup="dialog">Table</button></div>
 </header>
 <div class="tm-panel__body">
 <div class="tm-chart-readout aiu-readout" id="model-hit-chips"></div>
 <div class="tm-chart aiu-chart" id="model-hit-chart" role="img" aria-label="Cache hit rate per model and bucket"></div>
-<div class="tm-table-wrap aiu-table" hidden tabindex="0" role="region" aria-label="Cache hit data"></div>
 </div>
 </article>
 <article class="tm-panel aiu-view" id="model-effort" aria-labelledby="model-effort-title" hidden>
 <header class="tm-panel__head tm-panel__head--rich">
 <div class="tm-panel__heading"><h3 class="tm-panel__title" id="model-effort-title">Tokens by effort</h3><span class="tm-panel__subtitle" id="model-effort-sub"></span></div>
-<div class="tm-panel__actions"><span class="aiu-view-tools"><button class="tm-btn tm-btn--ghost tm-btn--icon tm-btn--sm copy" type="button" hidden aria-label="Copy data as JSON"><svg class="tm-icon tm-icon--sm" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 5.5h8v8h-8zM2.5 10.5v-8h8"/></svg></button><button class="tm-btn tm-btn--outline tm-btn--sm tm-btn--toggle toggle" type="button" aria-pressed="false">Table</button></span></div>
+<div class="tm-panel__actions"><button class="tm-btn tm-btn--outline tm-btn--sm table-open" type="button" aria-haspopup="dialog">Table</button></div>
 </header>
 <div class="tm-panel__body">
 <div class="tm-chart-readout aiu-readout" id="model-effort-chips"></div>
 <div class="tm-chart aiu-chart" id="model-effort-chart" role="img" aria-label="Tokens per reasoning effort level, stacked per bucket"></div>
-<div class="tm-table-wrap aiu-table" hidden tabindex="0" role="region" aria-label="Tokens by effort data"></div>
 </div>
 </article>
 </div>
@@ -183,7 +180,13 @@
 <div class="tm-collapsible__body"><div class="tm-panel-grid aiu-grid aiu-raw-grid" data-cols="2" id="cards" data-ignore></div></div>
 </details>
 
-<footer class="aiu-foot tm-meta"><span>AI Usage __HOMESTACK_USAGE_VERSION__ · Datastar 1.0.4 · Apache ECharts 6.1.0 · The Mechanics 0.1.5</span><span class="aiu-foot__links"><a href="/assets/datastar-LICENSE.md">Datastar license</a><a href="/assets/echarts-LICENSE.txt">ECharts license</a><a href="/assets/echarts-NOTICE.txt">Notices</a><span class="tm-tip aiu-tip-end"><button class="tm-btn tm-btn--ghost tm-btn--sm" id="export-all" type="button">Export all data</button><span class="tm-tip__bubble" aria-hidden="true">Download the data of every chart as a JSON file, with shared queries stored once and chart time boundaries</span></span></span></footer>
+<footer class="aiu-foot tm-meta"><span>AI Usage __HOMESTACK_USAGE_VERSION__ · Datastar 1.0.4 · Apache ECharts 6.1.0 · The Mechanics 0.1.6</span><span class="aiu-foot__links"><a href="/assets/datastar-LICENSE.md">Datastar license</a><a href="/assets/echarts-LICENSE.txt">ECharts license</a><a href="/assets/echarts-NOTICE.txt">Notices</a><span class="tm-tip aiu-tip-end"><button class="tm-btn tm-btn--ghost tm-btn--sm" id="export-all" type="button">Export all data</button><span class="tm-tip__bubble" aria-hidden="true">Download the data of every chart as a JSON file, with shared queries stored once and chart time boundaries</span></span></span></footer>
 </main>
+<dialog class="tm-dialog aiu-table-dialog" id="table-dialog" aria-labelledby="table-title">
+<div class="tm-dialog__head"><div class="aiu-dialog-heading"><h2 class="tm-dialog__title" id="table-title">Data</h2><p class="tm-meta" id="table-sub"></p></div>
+<button type="button" class="tm-btn tm-btn--ghost tm-btn--icon tm-btn--sm" data-close aria-label="Close"><svg class="tm-icon tm-icon--sm" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/></svg></button></div>
+<div class="tm-dialog__body"><div class="tm-table-wrap aiu-table" id="table-host" tabindex="0" role="region" aria-labelledby="table-title"></div></div>
+<div class="tm-dialog__foot"><button type="button" class="tm-btn tm-btn--ghost" id="table-copy">Copy as JSON</button><button type="button" class="tm-btn tm-btn--outline" data-close>Close</button></div>
+</dialog>
 <div class="tm-toast-region" id="toasts" aria-live="polite"></div>
 </body></html>

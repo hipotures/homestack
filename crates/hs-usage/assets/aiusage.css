@@ -195,7 +195,12 @@ body { overflow-x: hidden; font-variant-numeric: tabular-nums; }
 .aiu-state { padding: var(--tm-space-6) var(--tm-panel-pad); }
 
 /* ---------- tables, raw charts, footer ---------- */
-.aiu-table { max-height: 18rem; overflow: auto; }
+/* Data tables open in a modal as wide as their columns need, up to the viewport; rows scroll inside. */
+.aiu-table-dialog { width: fit-content; min-width: min(40rem, calc(100vw - 2rem)); max-width: calc(100vw - 2rem); }
+.aiu-table-dialog .tm-dialog__body { padding-bottom: 0; }
+.aiu-dialog-heading { display: grid; gap: 2px; min-width: 0; }
+.aiu-dialog-heading .tm-meta { margin: 0; }
+.aiu-table { max-height: calc(100dvh - 13rem); overflow: auto; }
 .aiu-table .tm-table td { white-space: nowrap; }
 .aiu-table .tm-table :is(th, td):not(:first-child) { text-align: right; }
 .aiu-raw .tm-collapsible__body { padding: 0; }
@@ -236,8 +241,6 @@ body { overflow-x: hidden; font-variant-numeric: tabular-nums; }
 .aiu-hits-tip { display: block; }
 .aiu-hits-tip > .aiu-hits { display: flex; }
 .aiu-push { margin-left: auto; white-space: nowrap; }
-/* Copy + Table sit on one center line. */
-.aiu-view-tools { display: inline-flex; align-items: center; gap: var(--tm-space-1); }
 /* Series-name headers wrap only at their <wbr> break points (agent ·, model family -), bottom-aligned. */
 .aiu-table .tm-table thead th { vertical-align: bottom; }
 .aiu-table .tm-table thead .aiu-col-name { white-space: normal; }

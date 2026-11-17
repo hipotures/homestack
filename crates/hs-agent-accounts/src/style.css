@@ -119,7 +119,8 @@ p { margin: 0; }
 
 /* Dialogs */
 .tm-dialog form { display: contents; }
-.aa-dialog--wide { width: min(54rem, calc(100vw - 2rem)); }
+/* Wide dialogs grow with their content (the checks table), up to the viewport. */
+.aa-dialog--wide { width: fit-content; min-width: min(54rem, calc(100vw - 2rem)); max-width: calc(100vw - 2rem); }
 .aa-stack { display: flex; flex-direction: column; gap: var(--tm-space-3); }
 .aa-dialog-heading { display: grid; gap: 2px; min-width: 0; }
 .aa-dialog-section { display: flex; flex-direction: column; gap: var(--tm-space-2); }
@@ -200,12 +201,8 @@ p { margin: 0; }
 /* the title is a flex row with a gap; spacing around "· plan" comes from margins only */
 .aa-account__title { gap: 0; }
 /* Rare action: a quiet icon in the page head, not a primary button. */
-.aa-add #add { color: var(--tm-text-2); }
-.aa-add #add:hover { color: var(--tm-text); }
 .aa-add > .tm-tip__bubble { left: auto; right: 0; transform: none; translate: none; white-space: nowrap; }
 
-.aa-theme #theme { color: var(--tm-text-2); }
-.aa-theme #theme:hover { color: var(--tm-text); }
 .aa-theme > .tm-tip__bubble { left: auto; right: 0; transform: none; translate: none; white-space: nowrap; }
 
 .aa-tipwrap--start > .tm-tip__bubble { left: -0.4em; transform: none; translate: none; }

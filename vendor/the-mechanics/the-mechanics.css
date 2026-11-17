@@ -1,4 +1,4 @@
-/*! The Mechanics 0.1.5 — design system — CC0-1.0 — https://github.com/hipotures/the-mechanics */
+/*! The Mechanics 0.1.6 — design system — CC0-1.0 — https://github.com/hipotures/the-mechanics */
 /*
  * The Mechanics — public CSS entry.
  * Layer order: tokens < themes < base < components. Unlayered consumer CSS
@@ -1518,8 +1518,16 @@
   .tm-btn-group > .tm-btn {
     border-radius: 0;
   }
+  /* Inner dividers are parts of one control (one value, many options), so
+     they are lighter than the control's frame: 1px ink inside, 2px outside.
+     Lines between separate objects (panel grids, KPI tiles, pipeline stages)
+     keep the full frame weight. */
   .tm-btn-group > .tm-btn + .tm-btn {
-    margin-left: calc(var(--tm-bw-control) * -1);
+    margin-left: 0;
+    border-left-width: var(--tm-bw-3);
+  }
+  .tm-btn-group > .tm-btn:not(:last-child) {
+    border-right-width: 0;
   }
   .tm-btn-group > .tm-btn:first-child { border-radius: var(--tm-radius-control) 0 0 var(--tm-radius-control); }
   .tm-btn-group > .tm-btn:last-child { border-radius: 0 var(--tm-radius-control) var(--tm-radius-control) 0; }
@@ -1558,7 +1566,7 @@
     font-size: var(--tm-text-xs);
   }
   .tm-segmented__option + .tm-segmented__option {
-    border-left: var(--tm-bw-control) solid var(--tm-ink);
+    border-left: var(--tm-bw-3) solid var(--tm-ink); /* part of one control: lighter than its 2px frame */
   }
   .tm-segmented__option:hover {
     background: var(--tm-hover);
