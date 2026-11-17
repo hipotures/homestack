@@ -237,3 +237,13 @@ body { overflow-x: hidden; font-variant-numeric: tabular-nums; }
 .aiu-push { margin-left: auto; white-space: nowrap; }
 /* Copy + Table sit on one center line. */
 .aiu-view-tools { display: inline-flex; align-items: center; gap: var(--tm-space-1); }
+/* Series-name headers wrap only at their <wbr> break points (agent ·, model family -), bottom-aligned. */
+.aiu-table .tm-table thead th { vertical-align: bottom; }
+.aiu-table .tm-table thead .aiu-col-name { white-space: normal; }
+.aiu-table .tm-table thead .aiu-col-name > span { white-space: nowrap; }
+.aiu-table .tm-table .aiu-col-time { text-align: left; font-family: var(--tm-font-mono); }
+/* Data tables are dense: tighter cell padding keeps up to six numeric columns inside a half-width panel. */
+.aiu-table .tm-table { --tm-cell-pad-x: var(--tm-space-1-5); }
+/* Wide tables (many models or tools) scroll sideways with the time column pinned. */
+.aiu-table .tm-table :is(th, td):first-child { position: sticky; left: 0; z-index: 1; background: var(--tm-surface); border-right: var(--tm-bw-3) solid var(--tm-line-2); }
+.aiu-table .tm-table thead th:first-child { z-index: 2; background: var(--tm-head-2); }

@@ -235,10 +235,21 @@
   const firstData=series=>Math.min(...series.flatMap(s=>s.points.filter(([,v])=>v>0).map(([t])=>t)));
   const sinceLabel=(t,range)=>{const d=new Date(t*1000),two=n=>String(n).padStart(2,"0");return range.end-range.start<=86400+range.step?`${two(d.getHours())}:${two(d.getMinutes())}`:`${two(d.getDate())}.${two(d.getMonth()+1)}`;};
   function renderTable(w) {
-    const table=el("table","tm-table"),thead=el("thead"),tbody=el("tbody"),head=el("tr");
-    head.append(el("th","","Bucket start (local)"),...w.spec.series.map(s=>el("th","tm-col-num",s.label||s.id)));for(const th of head.children)th.scope="col";thead.append(head);table.append(thead,tbody);
+    // Series names break only after the agent ("Claude Code ·"), after the model family ("claude-") or between label words.
+    // Pieces are [text, separator]: a hyphen break adds no space, a word break keeps one.
+    const name=(text,cls="tm-col-num aiu-col-name")=>{
+      const th=el("th",cls);th.scope="col";
+      const pieces=text.split(" · ").flatMap((part,i,all)=>{const m=part.match(/^([^-\s]+-)(\S.*)$/),tail=i<all.length-1?" ·":"";return m?[[m[1],"<wbr>"],[m[2]+tail," "]]:(part+tail).split(" ").map(w=>[w," "]);});
+      th.innerHTML=pieces.map(([piece,sep],i)=>`<span>${esc(piece)}</span>${i<pieces.length-1?sep:""}`).join("");
+      return th;
+    };
+    const table=el("table","tm-table"),thead=el("thead"),tbody=el("tbody"),head=el("tr"),bucket=name("Bucket start (local)","aiu-col-name");
+    head.append(bucket,...w.spec.series.map(s=>name(s.label||s.id)));thead.append(head);table.append(thead,tbody);
     const times=[...new Set(w.spec.series.flatMap(s=>s.points.map(p=>p[0])))].sort((a,b)=>b-a),maps=w.spec.series.map(s=>new Map(s.points));
-    for(const t of times){const row=el("tr");row.append(el("td","tm-num",new Date(t*1000).toLocaleString()),...maps.map(m=>el("td","tm-num",format(m.get(t),w.spec.unit))));tbody.append(row);}
+    // Compact local time like the rest of the dashboard; the year only when the rows span more than one.
+    const years=new Set(times.map(t=>new Date(t*1000).getFullYear())).size>1;
+    const when=t=>{const d=new Date(t*1000);return `${two(d.getDate())}.${two(d.getMonth()+1)}${years?"."+d.getFullYear():""} ${two(d.getHours())}:${two(d.getMinutes())}`;};
+    for(const t of times){const row=el("tr");row.append(el("td","aiu-col-time",when(t)),...maps.map(m=>el("td","tm-num",format(m.get(t),w.spec.unit))));tbody.append(row);}
     w.tableHost.replaceChildren(table);
   }
   // ---- Overview (main view). Values are backend totals; the browser only lays them out. ----
