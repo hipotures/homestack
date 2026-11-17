@@ -235,3 +235,5 @@ body { overflow-x: hidden; font-variant-numeric: tabular-nums; }
 .aiu-hits-tip { display: block; }
 .aiu-hits-tip > .aiu-hits { display: flex; }
 .aiu-push { margin-left: auto; white-space: nowrap; }
+/* Copy + Table sit on one center line. */
+.aiu-view-tools { display: inline-flex; align-items: center; gap: var(--tm-space-1); }
