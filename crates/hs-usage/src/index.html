@@ -50,7 +50,7 @@
 <select class="tm-select aiu-scope" id="agent" aria-label="Agent" data-bind:agent><option value="all">Agents: all</option><option value="claude">Claude Code</option><option value="codex">Codex</option><option value="antigravity">Antigravity</option></select>
 <select class="tm-select aiu-scope" id="host" aria-label="Server" data-bind:host><option value="*">Servers: all</option></select>
 <select class="tm-select aiu-scope" id="project" aria-label="Project" data-bind:project><option value="*">Projects: all</option></select>
-<span class="tm-tip tm-tip--below aiu-tip-end"><button id="theme" class="tm-btn tm-btn--ghost tm-btn--icon" type="button"><svg class="tm-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path id="theme-icon" d=""/></svg></button><span class="tm-tip__bubble" id="theme-tip" aria-hidden="true"></span></span>
+<span class="tm-tip tm-tip--below aiu-tip-end"><button id="theme" class="tm-btn tm-btn--outline tm-btn--icon" type="button"><svg class="tm-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path id="theme-icon" d=""/></svg></button><span class="tm-tip__bubble" id="theme-tip" aria-hidden="true"></span></span>
 </div></header>
 <div hidden data-effect="if($_packet) window.usage.apply(JSON.parse($_packet))"></div>
 <button id="resync" type="button" hidden data-on:click="$_sync++">Resynchronize</button>

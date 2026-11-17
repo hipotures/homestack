@@ -59,8 +59,9 @@ body { overflow-x: hidden; font-variant-numeric: tabular-nums; }
   font-size: var(--tm-text-xs);
   color: var(--tm-text-3);
 }
-.aiu-controls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--tm-space-2); min-width: 0; }
-.aiu-scope { width: auto; max-width: 13rem; }
+.aiu-controls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--tm-space-2) var(--tm-space-4); min-width: 0; }
+/* Scope lists cap their width: a long project name truncates; the open list shows it in full. */
+.aiu-scope { width: auto; max-width: 12rem; white-space: nowrap; overflow: clip; overflow-clip-margin: content-box; text-overflow: ellipsis; }
 .aiu-range { position: relative; max-width: 100%; }
 .aiu-range > .tm-segmented { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
 .aiu-more { gap: var(--tm-space-1); white-space: nowrap; }
