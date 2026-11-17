@@ -174,12 +174,12 @@
     return c;
   }
 
-  /** after changing data-tm-theme: rebuild the theme from CSS tokens and repaint */
-  function refresh() {
+  /** after changing data-tm-theme: rebuild the theme from CSS tokens and repaint the charts that pass include(chart) */
+  function refresh(include = () => true) {
     register();
     for (const c of charts) {
       if (c.isDisposed()) { charts.delete(c); continue; }
-      c.setTheme(THEME);
+      if (include(c)) c.setTheme(THEME);
     }
   }
 

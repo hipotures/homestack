@@ -157,11 +157,18 @@
     $("theme-icon").setAttribute("d",THEME_INFO[current].icon);
     const text=`Theme: ${THEME_INFO[current].label} · click for ${THEME_INFO[next].label}`;
     $("theme-tip").textContent=text;$("theme").setAttribute("aria-label",text);
-    // Series colors are resolved from CSS tokens, so charts are redrawn after the theme rebuild.
-    AIUsage.refresh();
-    for(const w of widgets.values())if(w.spec)draw(w);
-    if(datasets.size){renderOverview();renderModelViews();}
+    // Series colors are resolved from CSS tokens, so charts are redrawn after the theme rebuild. The page shows
+    // the new theme first; charts follow after that paint, and raw charts only when their section is open.
+    if(!id)return;
+    cancelAnimationFrame(themeFrame);
+    themeFrame=requestAnimationFrame(()=>setTimeout(()=>{
+      const raw=$("raw");rawStale=!raw.open;
+      AIUsage.refresh(c=>raw.open||!raw.contains(c.getDom()));
+      if(raw.open)for(const w of widgets.values())if(w.spec)draw(w);
+      if(datasets.size){renderOverview();renderModelViews();}
+    }));
   }
+  let themeFrame=0,rawStale=false;
   /** The dataset of a measurement the agent reports; agent capabilities come only from data. */
   const reported=(agent,measurement)=>{const d=datasets.get(`${agent}.${measurement}`);return d&&d.state!=="unavailable"?d:null;};
   function definitions() {
@@ -914,7 +921,11 @@
       event.preventDefault();tabs[(i+(event.key==="ArrowRight"?1:tabs.length-1))%tabs.length].click();
     };
     // Raw charts are drawn while the section is closed, so they are resized when it opens.
-    $("raw").ontoggle=()=>{if($("raw").open){widgets.forEach(w=>w.chart?.resize());balanceAll();}};
+    $("raw").ontoggle=()=>{
+      if(!$("raw").open)return;
+      if(rawStale){rawStale=false;const raw=$("raw");AIUsage.refresh(c=>raw.contains(c.getDom()));for(const w of widgets.values())if(w.spec)draw(w);}
+      widgets.forEach(w=>w.chart?.resize());balanceAll();
+    };
     setInterval(()=>{if(lastPacket&&Date.now()-lastPacket>75000){$("updated-mark").dataset.state="pending";condition("connection","warning","Connection lost","Live connection interrupted. Reconnecting…");}},15000);
   });
   window.addEventListener("pagehide",()=>widgets.forEach(w=>w.chart?.dispose()));
