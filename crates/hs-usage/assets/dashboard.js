@@ -529,7 +529,7 @@
       // Stacks on a time axis need identical x values in every series, so all are aligned to the buckets.
       series:[...visible.map((s,i)=>AIUsage.bar(s.name,(m=>times.filter(t=>t>=first).map(t=>[t*1000,m.get(t)||0]))(new Map(s.points)),s.key||s.name,{
         id:s.name,barMaxWidth:28,...(s.color?{itemStyle:{color:s.color}}:{}),
-        markPoint:i===visible.length-1&&peak[1]>0?{...AIUsage.peak(()=>`peak ${timeLabel(peak[0],range)}  ${fmtShort(peak[1])}`),data:[{coord:[peak[0]*1000,peak[1]]}]}:undefined,
+        markPoint:i===visible.length-1&&peak[1]>0&&$("show-peak").checked?{...AIUsage.peak(()=>`peak ${timeLabel(peak[0],range)}  ${fmtShort(peak[1])}`),data:[{coord:[peak[0]*1000,peak[1]]}]}:undefined,
       })), {id:"quota-overlay",type:"line",data:[],showSymbol:false,silent:false,
         markLine:{symbol:["none","none"],lineStyle:{type:"dashed",width:1.5},label:{show:true,position:"insideEndTop",fontSize:10,color:css("--tm-text-2"),backgroundColor:css("--tm-surface"),padding:3},data:markerEvents},
         markArea:{silent:false,label:{show:false},emphasis:{itemStyle:{opacity:.12}},tooltip:{trigger:"item",formatter:p=>esc(p.name)},data:overlay.areas}
@@ -872,6 +872,9 @@
   window.usage={initial,select,apply,custom,rangeLabel,restore(){theme();},debug(){return {epoch,snapshot,sourceAt,datasets,widgets,modelViews};}};
   document.addEventListener("DOMContentLoaded",()=>{
     for(const id of ["limit-events","limit-periods"]){$(id).checked=false;$(id).onchange=()=>{if(datasets.size)renderOverview();};}
+    // The peak label can cover overlay text, so it can be hidden; the choice is remembered.
+    try{$("show-peak").checked=localStorage.getItem("showPeak")!=="false";}catch(_){$("show-peak").checked=true;}
+    $("show-peak").onchange=()=>{try{localStorage.setItem("showPeak",String($("show-peak").checked));}catch(_){}if(datasets.size)renderOverview();};
     for(const id of ["agent","host","project"])$(id).addEventListener("change",fitScopes);
     document.fonts.ready.then(fitScopes);
     theme();$("theme").onclick=()=>{const t=document.documentElement.dataset.tmTheme;theme(THEMES[(THEMES.indexOf(t)+1)%THEMES.length]);};
