@@ -277,11 +277,13 @@
     const tone=!good?"":(up===(good==="up"))?"tm-trend--good":"tm-trend--bad",verdict=tone==="tm-trend--good"?"improving":tone?"worsening":"change";
     return `<span class="tm-trend ${tone}">${up?"↑ +":"↓ −"}${text}<span class="tm-sr-only"> vs previous period (${verdict})</span></span>`;
   }
-  /** Agent shares of one total, as identity-colored labels. */
+  /** A thin stacked bar of shares; parts are [value, color]. */
+  const shareBar=parts=>{const all=parts.reduce((n,[v])=>n+(v||0),0);return all?`<div class="aiu-track aiu-track--sm" aria-hidden="true">${parts.filter(([v])=>v>0).map(([v,c])=>`<span style="width:${v/all*100}%;background:${c}"></span>`).join("")}</div>`:"";};
+  /** Agent shares of one total: a stacked bar and identity-colored labels. */
   function split(key,summary){
     const parts=chosen().map(a=>({a,v:summary[a]?.[key]?.value})),total=parts.reduce((s,p)=>s+(p.v||0),0);
     if(!total)return "";
-    return parts.map(p=>dot(agentColor(p.a),`${agents[p.a]} ${p.v==null?"not reported":Math.round(p.v/total*100)+"%"}`)).join("");
+    return shareBar(parts.map(p=>[p.v,agentColor(p.a)]))+parts.map(p=>dot(agentColor(p.a),`${agents[p.a]} ${p.v==null?"not reported":Math.round(p.v/total*100)+"%"}`)).join("");
   }
   function sparkline(points,color){
     const values=points.map(([,v])=>v),max=Math.max(...values,0);
@@ -318,10 +320,10 @@
     const overall=(totals.cacheHit?.value??0)*100,floor=overall>=98?98:Math.max(0,Math.floor(overall/5)*5-5);
     const hitBars=known.length?`<div class="aiu-hits" aria-hidden="true">${hits.map(([,v])=>v==null?`<span style="height:2px;background:var(--aiu-track)"></span>`:`<span style="height:${Math.max(2,Math.round((Math.max(v,floor)-floor)/(100-floor)*36))}px;background:${v<Math.max(floor,overall-1)?"var(--tm-warning)":"var(--aiu-tok-cached)"}"></span>`).join("")}</div>`:"";
     const inputs=["cached","input","written"].map(k=>totals[k]?.value||0),inputAll=inputs.reduce((s,n)=>s+n,0);
-    const hitNote=inputAll?[dot("var(--aiu-tok-cached)",`cached ${F.pct(inputs[0]/inputAll*100)}`),known.length?`<span>scale ${floor}–100% · min ${F.pct(low[1])} at ${timeLabel(low[0],range)}</span>`:""].join(""):"";
+    const hitNote=inputAll?[shareBar(inputs.map((n,i)=>[n,`var(${["--aiu-tok-cached","--aiu-tok-uncached","--aiu-tok-written"][i]})`])),dot("var(--aiu-tok-cached)",`cached ${F.pct(inputs[0]/inputAll*100)}`),known.length?`<span>scale ${floor}–100% · min ${F.pct(low[1])} at ${timeLabel(low[0],range)}</span>`:""].join(""):"";
     const cost=sumPoints(sel.map(a=>datasets.get(`${a}.cost`)?.details?.timeline)),outputs=sumPoints(category("output"));
     const output=totals.output?.value,reasoning=totals.reasoning?.value,share=output&&reasoning!=null?reasoning/output:null;
-    const outputBody=output?[share==null?"<span>reasoning not reported</span>":dot("var(--aiu-tok-reasoning)",`reasoning ${F.tokens(reasoning)} · ${Math.round(share*100)}%`),`<span>response ${F.tokens(output-(reasoning||0))}</span>`].join(""):"";
+    const outputBody=output?[shareBar([[reasoning||0,"var(--aiu-tok-reasoning)"],[output-(reasoning||0),"var(--aiu-tok-output)"]]),share==null?"<span>reasoning not reported</span>":dot("var(--aiu-tok-reasoning)",`reasoning ${F.tokens(reasoning)} · ${Math.round(share*100)}%`),`<span>response ${F.tokens(output-(reasoning||0))}</span>`].join(""):"";
     $("kpis").innerHTML=[
       kpi("Cost",F.cost(totals.cost?.value),delta(totals.cost?.value,previous.cost,{good:"down"}),sparkline(spark(cost),lead),split("cost",summary),F.cost(totals.cost?.value,true)),
       kpi("Tokens",F.tokens(totals.total?.value),delta(totals.total?.value,previous.total),sparkline(spark(totalSeries),lead),split("total",summary),F.full(totals.total?.value)),
