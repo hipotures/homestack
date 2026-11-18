@@ -195,7 +195,7 @@ p { margin: 0; }
 .aa-auth-problem { color: var(--tm-warning); }
 .aa-account.is-inactive .aa-auth-problem { color: var(--tm-text-2); }
 
-.aa-plan { margin-left: 0.28em; font-weight: var(--tm-weight-regular); color: var(--tm-text-2); white-space: nowrap; }
+.aa-plan { font-weight: var(--tm-weight-regular); color: var(--tm-text-2); white-space: nowrap; }
 
 /* Rare action: a quiet icon in the page head, not a primary button. */
 .aa-add > .tm-tip__bubble { left: auto; right: 0; transform: none; translate: none; white-space: nowrap; }

@@ -273,7 +273,7 @@ async function refresh() {
     const title = node('h3', profile.display_name, 'tm-panel__title aa-account__title');
     title.id = `title-${profile.id}`;
     // Plan changes rarely, so it sits with the name: "Lab account · max", thin.
-    if (profile.account?.plan) title.append(node('span', `· ${profile.account.plan}`, 'aa-plan'));
+    if (profile.account?.plan) title.append(' ', node('span', `· ${profile.account.plan}`, 'aa-plan'));
     identity.append(node('span', profile.provider, 'tm-eyebrow aa-provider'), title);
     header.append(identity);
     // Every account can take a payment date; a provider-reported period is used
