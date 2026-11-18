@@ -42,7 +42,13 @@ p { margin: 0; }
 .aa-provider { color: color-mix(in oklab, var(--aa-agent, var(--tm-text-2)) 72%, var(--tm-text)); }
 
 /* Account panel */
-.aa-account__head { flex-wrap: nowrap; }
+/* Grid head: provider and payment period share the first row, so the title
+   below gets the full card width. */
+.aa-account__head { display: grid; grid-template-columns: 1fr auto; align-items: baseline; column-gap: var(--tm-space-2); row-gap: 2px; }
+.aa-account__head > .tm-panel__heading { display: contents; }
+.aa-account__head .aa-provider { grid-area: 1 / 1; }
+.aa-account__head > .aa-tipwrap { grid-area: 1 / 2; }
+.aa-account__head .aa-account__title { grid-area: 2 / 1 / 3 / -1; }
 /* Inline flow: the name breaks only between words and "· plan" moves as one unit. */
 .aa-account__title { display: block; overflow-wrap: break-word; }
 .aa-period {
@@ -148,8 +154,6 @@ p { margin: 0; }
 @media (max-width: 640px) {
   .aa-main { padding: var(--tm-space-4) var(--tm-space-4) var(--tm-space-8); }
   .aa-window-row { grid-template-columns: 1fr; }
-  .aa-account__head { flex-wrap: wrap; }
-  .aa-period--manual { margin-left: calc(-2px - var(--tm-bw-control)); }
 }
 
 /* Variant: separate, free-standing panels instead of one framed grid. */
