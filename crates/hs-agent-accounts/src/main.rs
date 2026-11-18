@@ -138,8 +138,8 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             get(|| async { ([(header::CONTENT_TYPE, "text/javascript")], include_str!("theme.js")) }),
         )
         .route(
-            "/tm-controls.js",
-            get(|| async { ([(header::CONTENT_TYPE, "text/javascript")], include_str!("../../../web/the-mechanics/tm-controls.js")) }),
+            "/vendor/the-mechanics/the-mechanics.js",
+            get(|| async { ([(header::CONTENT_TYPE, "text/javascript")], include_str!("../../../vendor/the-mechanics/the-mechanics.js")) }),
         )
         .route(
             "/app.js",

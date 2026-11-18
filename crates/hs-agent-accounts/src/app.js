@@ -1,5 +1,7 @@
 'use strict';
 const $ = selector => document.querySelector(selector);
+const { confirmDialog, setFieldError, validateInline } = window.TheMechanics;
+const clearIcon = '<svg class="tm-icon tm-icon--sm" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6"/></svg>';
 let selectedOperation = null;
 let source = null;
 const providerCapabilities = new Map();
@@ -187,7 +189,7 @@ function windowDialog(profile, limit) {
   $('#window-start').disabled = !idle || !profile.enabled;
   $('#auto-time').value = profile.auto_start?.time || '';
   $('#auto-tolerance').value = profile.auto_start?.tolerance_minutes ?? 60;
-  syncStepper($('#auto-tolerance').closest('.tm-stepper'));
+  $('#auto-tolerance').dispatchEvent(new Event('input', { bubbles: true }));
   $('#auto-clear').disabled = !profile.auto_start;
   setText($('#auto-zone'), `Time zone: ${browserZone}`);
   dialog.returnValue = '';
@@ -407,23 +409,6 @@ async function refresh() {
   runtimeGrid.apply();
   setText($('#versions'), [appVersion, ...runtimes.map(r => `${runtimeName(r.provider)} ${r.version}`)].join(' · '));
 }
-/** Destructive or significant confirmation in a The Mechanics dialog instead of window.confirm(). Resolves true on confirm. */
-function confirmDialog({ title, body, confirm = 'Confirm', danger = false }) {
-  const dialog = $('#confirm-dialog'), ok = $('#confirm-ok');
-  setText($('#confirm-title'), title);
-  setText($('#confirm-body'), body);
-  ok.textContent = confirm;
-  ok.className = `tm-btn ${danger ? 'tm-btn--danger' : 'tm-btn--primary'}`;
-  const trigger = document.activeElement;
-  dialog.returnValue = '';
-  dialog.showModal();
-  $('#confirm-cancel').focus();
-  return new Promise(resolve => dialog.addEventListener('close', () => {
-    resolve(dialog.returnValue === 'confirm');
-    if (trigger?.isConnected) trigger.focus();
-  }, { once: true }));
-}
-$('#confirm-dialog').addEventListener('click', event => { if (event.target === $('#confirm-dialog')) $('#confirm-dialog').close('cancel'); });
 /** Panel grids never leave an empty cell: balance the columns, stretch the last panel over a remaining gap (after balanceGrid in The Mechanics playground). */
 function balanceGrid(grid, minPx) {
   const apply = () => {
@@ -443,33 +428,6 @@ function balanceGrid(grid, minPx) {
 }
 // Separate panels: a short last row is just canvas, no stretching needed.
 const profileGrid = { apply() {} }, runtimeGrid = { apply() {} };
-const clearIcon = '<svg class="tm-icon tm-icon--sm" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6"/></svg>';
-// Text fields get the clear button while they hold text (after enhanceClearable in the playground).
-document.querySelectorAll('input[data-clearable]').forEach(input => {
-  if (!input.placeholder) input.placeholder = ' ';
-  const wrap = node('span', undefined, 'tm-clearable'), tip = node('span', undefined, 'tm-tip tm-tip--below tm-input-clear');
-  tip.innerHTML = `<button type="button" class="tm-input-clear__btn" tabindex="-1" aria-label="Clear">${clearIcon}</button><span class="tm-tip__bubble" aria-hidden="true">Clear</span>`;
-  input.replaceWith(wrap); wrap.append(input, tip);
-  tip.firstElementChild.addEventListener('mousedown', event => event.preventDefault());
-  tip.firstElementChild.addEventListener('click', () => { input.value = ''; input.dispatchEvent(new Event('input', { bubbles: true })); input.focus(); });
-});
-// Number steppers: − / + within min/max; a button disables at its bound (after wireSteppers in the playground).
-function syncStepper(stepper) {
-  const input = stepper.querySelector('input'), value = input.valueAsNumber;
-  stepper.querySelectorAll('[data-tm-step]').forEach(b => {
-    const dir = +b.dataset.tmStep;
-    b.disabled = !Number.isNaN(value) && ((dir < 0 && value <= +input.min) || (dir > 0 && value >= +input.max));
-  });
-}
-document.querySelectorAll('.tm-stepper').forEach(stepper => {
-  const input = stepper.querySelector('input');
-  stepper.querySelectorAll('[data-tm-step]').forEach(b => b.addEventListener('click', () => {
-    if (Number.isNaN(input.valueAsNumber)) input.value = input.min || 0;
-    else if (+b.dataset.tmStep > 0) input.stepUp(); else input.stepDown();
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-  }));
-  input.addEventListener('input', () => syncStepper(stepper));
-});
 const runtimeName = provider => ({ codex: 'Codex CLI', claude: 'Claude Code' })[provider] || provider;
 const appVersion = document.querySelector('#versions').textContent;
 function compareVersions(a, b) {
@@ -735,40 +693,6 @@ function swapLabel(shown, other) {
   const alt = node('span', other); alt.setAttribute('aria-hidden', 'true'); alt.className = 'aa-swap__alt';
   box.append(node('span', shown), alt);
   return box;
-}
-
-/* Inline validation instead of browser bubbles (ported from The Mechanics
-   playground lib.js): errors appear under the field as .tm-field__error. */
-function setFieldError(input, message) {
-  const field = input.closest(".tm-field") || input.parentElement;
-  let err = field.querySelector(":scope > .tm-field__error");
-  if (!message) {
-    input.removeAttribute("aria-invalid");
-    input.setCustomValidity("");
-    err?.remove();
-    return;
-  }
-  input.setCustomValidity(message);
-  input.setAttribute("aria-invalid", "true");
-  if (!err) {
-    err = document.createElement("span");
-    err.className = "tm-field__error";
-    err.id = `${input.id || `f${Math.random().toString(36).slice(2, 7)}`}-err`;
-    field.append(err);
-  }
-  err.textContent = message;
-  if (!(input.getAttribute("aria-describedby") || "").includes(err.id)) input.setAttribute("aria-describedby", [input.getAttribute("aria-describedby"), err.id].filter(Boolean).join(" "));
-}
-function validateInline(form, check = () => {}) {
-  form.noValidate = true;
-  form.addEventListener("input", (e) => { if (e.target.getAttribute?.("aria-invalid") === "true") setFieldError(e.target, ""); });
-  form.addEventListener("submit", (e) => {
-    form.querySelectorAll("[aria-invalid='true']").forEach((el) => setFieldError(el, ""));
-    check(form); // custom rules call setFieldError
-    const invalid = [...form.elements].filter((el) => el.willValidate && !el.checkValidity());
-    invalid.forEach((el) => setFieldError(el, el.dataset.error || el.validationMessage));
-    if (invalid.length) { e.preventDefault(); e.stopImmediatePropagation(); invalid[0].focus(); }
-  }, true);
 }
 
 ['#create', '#code-form', '#window-form', '#payment-form'].forEach(sel => { const f = $(sel); if (f) validateInline(f); });

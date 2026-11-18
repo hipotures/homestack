@@ -13,7 +13,7 @@
 <link rel="stylesheet" href="/vendor/the-mechanics/fonts.css?v=__AGENT_ACCOUNTS_VERSION__">
 <link rel="stylesheet" href="/vendor/the-mechanics/the-mechanics.css?v=__AGENT_ACCOUNTS_VERSION__">
 <link rel="stylesheet" href="/style.css?v=__AGENT_ACCOUNTS_VERSION__">
-<script src="/tm-controls.js?v=__AGENT_ACCOUNTS_VERSION__" defer></script>
+<script type="module" src="/vendor/the-mechanics/the-mechanics.js?v=__AGENT_ACCOUNTS_VERSION__"></script>
 <script src="/app.js?v=__AGENT_ACCOUNTS_VERSION__" defer></script>
 </head>
 <body class="tm-root">
@@ -52,7 +52,7 @@
     <button type="button" class="tm-btn tm-btn--ghost tm-btn--icon tm-btn--sm" data-close aria-label="Close"><svg class="tm-icon tm-icon--sm" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" stroke="currentColor" stroke-width="1.6"/></svg></button></div>
   <div class="tm-dialog__body aa-stack">
     <div class="tm-field"><label class="tm-field__label" for="providers">Provider</label><select class="tm-select" name="provider" id="providers"></select></div>
-    <div class="tm-field"><label class="tm-field__label" for="display-name">Display name</label><input class="tm-input" id="display-name" name="display_name" required maxlength="80" data-clearable></div>
+    <div class="tm-field"><label class="tm-field__label" for="display-name">Display name</label><input class="tm-input" id="display-name" name="display_name" required maxlength="80"></div>
   </div>
   <div class="tm-dialog__foot"><button type="button" class="tm-btn tm-btn--outline" data-close>Cancel</button><button class="tm-btn tm-btn--primary">Create profile</button></div>
 </form></dialog>
@@ -65,7 +65,7 @@
     <a id="auth-url" class="aa-link" target="_blank" rel="noopener noreferrer" hidden>Open authorization page</a>
     <div class="aa-code-row"><p id="device-code"></p><button type="button" id="copy-code" class="tm-btn tm-btn--sm tm-btn--outline" hidden>Copy code</button></div>
     <form id="code-form" class="aa-code-form" hidden>
-      <div class="tm-field"><label class="tm-field__label" for="auth-code">Authorization code</label><input class="tm-input tm-input--mono" id="auth-code" autocomplete="off" maxlength="4096" data-clearable></div>
+      <div class="tm-field"><label class="tm-field__label" for="auth-code">Authorization code</label><input class="tm-input tm-input--mono" id="auth-code" autocomplete="off" maxlength="4096"></div>
       <button class="tm-btn tm-btn--primary">Submit code</button>
     </form>
   </div>
@@ -85,7 +85,7 @@
       <h3 class="aa-h3">Daily auto-start</h3>
       <p>From this time until the tolerance ends, starts the window as soon as it is not running. At most once a day.</p>
       <div class="aa-window-row">
-        <div class="tm-field"><label class="tm-field__label" for="auto-time">Time</label><input class="tm-input tm-input--mono" id="auto-time" placeholder="HH:MM" autocomplete="off"></div>
+        <div class="tm-field"><label class="tm-field__label" for="auto-time">Time</label><input class="tm-input tm-input--mono" id="auto-time" placeholder="HH:MM" autocomplete="off" data-no-clear></div>
         <div class="tm-field"><label class="tm-field__label" for="auto-tolerance">Tolerance (minutes)</label>
           <div class="tm-stepper">
             <button type="button" class="tm-stepper__btn" data-tm-step="-1" aria-label="Decrease tolerance"><svg class="tm-icon tm-icon--sm" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10" stroke="currentColor" stroke-width="1.6"/></svg></button>
@@ -106,7 +106,7 @@
   <div class="tm-dialog__body aa-stack">
     <p>Date and time of the latest receipt. The billing period ends one month later.</p>
     <div class="tm-field"><label class="tm-field__label" for="payment-at">Paid at</label>
-      <div class="aa-payment-row"><input class="tm-input tm-input--mono" id="payment-at" required placeholder="DD.MM.YYYY HH:MM" autocomplete="off"><button type="button" id="payment-next" class="tm-btn tm-btn--outline">+1 month</button></div>
+      <div class="aa-payment-row"><input class="tm-input tm-input--mono" id="payment-at" required placeholder="DD.MM.YYYY HH:MM" autocomplete="off" data-no-clear><button type="button" id="payment-next" class="tm-btn tm-btn--outline">+1 month</button></div>
     </div>
   </div>
   <div class="tm-dialog__foot"><button type="button" class="tm-btn tm-btn--outline" data-close>Cancel</button><button type="button" id="payment-clear" class="tm-btn tm-btn--ghost">Clear</button><button class="tm-btn tm-btn--primary">Save</button></div>
@@ -119,12 +119,6 @@
   <div class="tm-dialog__foot"><button type="button" class="tm-btn tm-btn--outline" data-close>Close</button></div>
 </dialog>
 
-<dialog id="confirm-dialog" class="tm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-body"><form method="dialog">
-  <div class="tm-dialog__head"><h2 class="tm-dialog__title" id="confirm-title"></h2>
-    <button class="tm-btn tm-btn--ghost tm-btn--icon tm-btn--sm" value="cancel" aria-label="Close"><svg class="tm-icon tm-icon--sm" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" stroke="currentColor" stroke-width="1.6"/></svg></button></div>
-  <div class="tm-dialog__body" id="confirm-body"></div>
-  <div class="tm-dialog__foot"><button class="tm-btn tm-btn--outline" value="cancel" id="confirm-cancel">Cancel</button><button class="tm-btn" value="confirm" id="confirm-ok">Confirm</button></div>
-</form></dialog>
 <div class="tm-toast-region" aria-live="polite" aria-relevant="additions"></div>
 </body>
 </html>

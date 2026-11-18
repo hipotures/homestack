@@ -134,7 +134,7 @@ Several panels side by side: `.tm-panel-grid` (cells share the outer frame, 2px 
 </div>
 
 <select class="tm-select" id="team"><option>Research</option><option>Sales</option></select>
-<!-- Firefox: enhanceSelects() opens the same styled list; dates: enhanceDateTime() -->
+<!-- the-mechanics.js: Firefox gets the same styled list; date/time fields get the .tm-picker -->
 ```
 
 ## Table with bulk bar

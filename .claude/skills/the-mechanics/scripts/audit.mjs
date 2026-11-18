@@ -10,7 +10,7 @@ import { join, extname, basename } from "node:path";
 
 const EXT = new Set([".css", ".scss", ".sass", ".less", ".html", ".htm", ".js", ".mjs", ".jsx", ".ts", ".tsx", ".svelte", ".vue", ".astro", ".rs", ".jinja", ".j2", ".hbs", ".erb", ".twig"]);
 const SKIP_DIR = new Set(["node_modules", ".git", "dist", "build", "target", ".next", ".svelte-kit", "coverage", ".cache", "vendor"]);
-const SKIP_FILE = /the-mechanics(\.daisyui)?(\.min)?\.css$|^fonts\.css$/;
+const SKIP_FILE = /the-mechanics(\.daisyui)?(\.min)?\.(css|js)$|^fonts\.css$/;
 
 const px = (v, unit) => (unit === "rem" || unit === "em" ? parseFloat(v) * 16 : parseFloat(v));
 const RULES = [
@@ -72,6 +72,11 @@ const RULES = [
     test: (l) => !/document\.title|<title>|\.tm-tip/.test(l) && (/(^|[\s<])title\s*=\s*["'`{$]/.test(l) || /\.title\s*=\s*[^=]/.test(l) || /setAttribute\(\s*["']title["']/.test(l)),
   },
   {
+    id: "own-helper-copy",
+    why: "a copy of a The Mechanics behavior: load the-mechanics.js instead, so fixes arrive with the installer",
+    test: (l) => /function\s+(enhanceSelects|enhanceDateTime|followAnchor|trackInputModality|enhanceTips|enhanceClearable|anchorPopover|wireMenus|confirmDialog)\b/.test(l),
+  },
+  {
     id: "important",
     why: "app CSS outside layers already wins; !important usually hides a structure problem",
     test: (l, ext) => [".css", ".scss", ".less"].includes(ext) && /!important/.test(l),
@@ -92,11 +97,16 @@ const dirs = process.argv.slice(2);
 if (!dirs.length) { console.error("usage: node audit.mjs <dir> [<dir>…]"); process.exit(0); }
 const counts = {};
 let files = 0;
+// Whole-project check: date/time fields or selects but the behaviors module is never loaded.
+const needsJs = [];
+let loadsJs = false;
 for (const d of dirs) {
   for (const f of walk(d)) {
     files++;
     const ext = extname(f);
     readFileSync(f, "utf8").split("\n").forEach((line, i) => {
+      if (/the-mechanics(\.min)?\.js/.test(line)) loadsJs = true;
+      if (/type\s*=\s*["'](date|time|datetime-local)["']|class\s*=\s*["'][^"']*\btm-select\b/.test(line)) needsJs.push(`${f}:${i + 1}`);
       if (line.length > 400) return; // minified
       if (/^\s*(\/\/|\/?\*|<!--)/.test(line)) return; // comments
       for (const r of RULES) {
@@ -108,6 +118,11 @@ for (const d of dirs) {
     });
   }
 }
+if (needsJs.length && !loadsJs) {
+  counts["no-behaviors-js"] = needsJs.length;
+  for (const at of needsJs.slice(0, 10)) console.log(`${at}  [no-behaviors-js]  date/time field or .tm-select, but the-mechanics.js is never loaded`);
+}
 console.log(`\n${files} files scanned.`);
 for (const r of RULES) if (counts[r.id]) console.log(`  ${r.id}: ${counts[r.id]} — ${r.why}`);
+if (counts["no-behaviors-js"]) console.log(`  no-behaviors-js: ${counts["no-behaviors-js"]} — without the-mechanics.js these open the browser's own calendar/clock/list; load it next to the CSS`);
 if (!Object.keys(counts).length) console.log("  no findings");

@@ -1,6 +1,6 @@
 # Distribution and integration guide
 
-The Mechanics ships as **plain, compiled CSS** with no runtime JavaScript. Tailwind CSS and daisyUI are used only inside this playground; consumers do not need them.
+The Mechanics ships as **plain, compiled CSS** plus an **optional behaviors module** `the-mechanics.js` (no dependencies, no framework). The CSS alone gives the full look; the module replaces what CSS cannot reach — the browser's own date/time popups, Firefox's select list, `title` tooltips, `confirm()` — and adds the small behaviors the design rules assume. Tailwind CSS and daisyUI are used only inside this playground; consumers do not need them.
 
 > Integration into existing applications (Intelitex, HomeStack, Gitiary, …) is **not** part of this work and requires owner approval. The snippets below describe the intended path only.
 
@@ -9,7 +9,7 @@ The Mechanics ships as **plain, compiled CSS** with no runtime JavaScript. Tailw
 **From a release (recommended).** Every release attaches `the-mechanics-css-<tag>.zip`, `the-mechanics-skill-<tag>.zip`, `SHA256SUMS` and `install.sh`. From the consuming project's root:
 
 ```sh
-curl -fsSL https://github.com/hipotures/the-mechanics/releases/latest/download/install.sh | sh -s -- --version v0.1.8 --css public/vendor/the-mechanics
+curl -fsSL https://github.com/hipotures/the-mechanics/releases/latest/download/install.sh | sh -s -- --version v0.1.9 --css public/vendor/the-mechanics
 ```
 
 This puts the files below into `--css` (default `vendor/the-mechanics`) and the agent skill into `.claude/skills/the-mechanics` (`--no-skill` to skip). Commit the vendored files in the consuming project so builds do not depend on GitHub. See `scripts/install.sh --help` for all options.
@@ -26,6 +26,7 @@ corepack pnpm build:css      # → dist/the-mechanics/
 | `the-mechanics.css` | tokens + three themes + scoped base + all `.tm-*` components, in cascade layers `tm.tokens < tm.themes < tm.base < tm.components` |
 | `fonts.css` + `fonts/*.woff2` | IBM Plex Sans/Mono 400–700, Latin + Latin Extended (Polish), SIL OFL 1.1 license files included |
 | `the-mechanics.daisyui.css` | optional bridge that maps daisyUI 5 variables to `--tm-*` tokens |
+| `the-mechanics.js` | optional behaviors, ES module, starts itself (see *Behaviors* below) |
 
 Source files (`src/the-mechanics/*.css`) are also importable directly by any bundler.
 
@@ -37,9 +38,36 @@ Source files (`src/the-mechanics/*.css`) are also importable directly by any bun
 - **Base styles:** opt-in via `class="tm-root"` on `<body>` or an app root. Nothing global is restyled without it except `--tm-*` variables on `:root`.
 - **Tokens:** every `--tm-*` custom property listed in `DESIGN.md §4` is public. Others (`--_bg`, `--_series`, …) are private.
 - **Components:** classes prefixed `tm-` with BEM-style elements (`tm-panel__head`) and modifiers (`tm-btn--primary`). State is expressed through native attributes: `disabled`, `aria-invalid`, `aria-busy`, `aria-pressed`, `aria-selected`, `aria-current`, `aria-sort`, `:checked`, `:indeterminate`, `[open]`, `:popover-open`.
-- **Input-modality hook (optional, recommended with scripted popups):** `data-tm-input="pointer" | "key"` on `<html>`, set from capturing `pointerdown` / `keydown` listeners (`trackInputModality()` in `src/playground/lib.js`). With it, popup items focused by script after a mouse action show no focus frame, and a select clicked open shows no lift. Without it, browsers may paint that focus as keyboard focus before the first click on the page.
+- **Input-modality hook (optional, recommended with scripted popups):** `data-tm-input="pointer" | "key"` on `<html>`, set from capturing `pointerdown` / `keydown` listeners (`trackInputModality()`, part of `the-mechanics.js`). With it, popup items focused by script after a mouse action show no focus frame, and a select clicked open shows no lift. Without it, browsers may paint that focus as keyboard focus before the first click on the page.
 - **Overrides:** consumer CSS that is not in a layer always wins over the library; no `!important` needed.
-- **Behavior:** provided by native elements (`<dialog>`, `<details>`, `popover`, form controls). Small optional behaviors used in the playground (menu arrow keys, roving lists, toasts, chart tooltips, select fallback `enhanceSelects`, date/time picker `enhanceDateTime`, restorable alerts `dismissibleAlert`, clear buttons `enhanceClearable`, `data-tm-tip` tooltips `enhanceTips`, inline form validation `validateInline` / `setFieldError`) live in `src/playground/lib.js` and `charts.js` as references, not as part of the CSS contract.
+- **Behavior:** native elements (`<dialog>`, `<details>`, `popover`, form controls) plus the optional `the-mechanics.js`.
+
+### Behaviors — `the-mechanics.js`
+
+```html
+<script type="module" src="/vendor/the-mechanics/the-mechanics.js"></script>
+```
+
+On load it runs `init(document)` and keeps enhancing elements added later (client-rendered views, dialogs), so an app normally needs nothing else. `init(root)` is idempotent and does:
+
+| Behavior | What it replaces / adds |
+|---|---|
+| date/time picker | every `.tm-input[type=date|time]` gets a `.tm-picker-field` button and the `.tm-picker` popup (Monday first, 24 h) instead of the browser's calendar/clock; typing still uses the native field |
+| select list fallback | in browsers without `appearance: base-select` (Firefox) every `.tm-select` opens the styled `.tm-listbox` instead of the OS list; the `<select>` stays the source of truth |
+| menus | `[popovertarget]` popovers: anchoring to the invoker, arrow keys, focus return, follow on page scroll |
+| tooltips | `data-tm-tip="…"` on any element shows the `.tm-tip` bubble (never `title`) |
+| clear ✕ | text/search/email/url/tel `.tm-input` get a clear button while they hold text (`data-no-clear` opts out) |
+| stepper | `.tm-stepper` − / + buttons (`[data-tm-step]`) |
+| input modality | `data-tm-input="pointer" | "key"` on `<html>` (mouse-opened popups show no focus frame) |
+
+Functions to call from app code: `toast({ tone, title, body, timeout })`, `confirmDialog({ title, body, confirm, cancel, danger })` → `Promise<boolean>` (instead of `window.confirm`), `dismissibleAlert(alert, restoreInto, opts)`, `setFieldError(input, message)`, `validateInline(form, check)`, `anchorPopover(pop, anchor)`, `followAnchor(pop, anchor, onGone)`.
+
+```js
+import { toast, confirmDialog } from "/vendor/the-mechanics/the-mechanics.js";
+if (await confirmDialog({ title: "Delete account?", body: "This cannot be undone.", confirm: "Delete", danger: true })) { … }
+```
+
+Manual start (frameworks that want control): put `data-tm-manual` on `<html>` and call `init(root)` after rendering. Apps that copied helpers from the playground earlier (`tm-select.js`, a ported `enhanceSelects` / `enhanceDateTime` / `followAnchor` / `trackInputModality`) should delete those copies and load this file instead, so fixes arrive with the installer. Other playground helpers (multi-select, command palette, chart tooltips in `p1.js` / `charts.js`) remain references to port.
 
 ## 3. Plain HTML / vanilla JS
 
@@ -49,6 +77,7 @@ Working example: [`examples/plain-html/index.html`](../examples/plain-html/index
 <html lang="en" data-tm-theme="coffee">
 <link rel="stylesheet" href="/vendor/the-mechanics/fonts.css">
 <link rel="stylesheet" href="/vendor/the-mechanics/the-mechanics.css">
+<script type="module" src="/vendor/the-mechanics/the-mechanics.js"></script> <!-- optional behaviors -->
 <body class="tm-root">
   <section class="tm-region">
     <header class="tm-region__head"><h2 class="tm-region__title">Workers</h2></header>
@@ -67,6 +96,7 @@ Theme switch: `document.documentElement.dataset.tmTheme = "dark"`.
 // main.jsx
 import "the-mechanics/dist/the-mechanics/fonts.css";
 import "the-mechanics/dist/the-mechanics/the-mechanics.css";
+import "the-mechanics/dist/the-mechanics/the-mechanics.js"; // optional behaviors; starts itself and watches re-renders
 
 export function Panel({ title, meta, children }) {
   return (
