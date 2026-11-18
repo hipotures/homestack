@@ -517,7 +517,8 @@
     $("trend-sub").textContent=`${bucketLabel(range.step)} · stacked by ${metric==="types"?"token type":"model"} · Shift+drag to sum a span`;
     for(const b of document.querySelectorAll("[data-metric]"))b.setAttribute("aria-pressed",String(b.dataset.metric===metric));
     $("trend-legend").innerHTML=visible.map(s=>legendItem(s.color||AIUsage.colorFor(s.key||s.name),esc(s.name))).join("");
-    trendView={visible,times:times.filter(t=>t>=first),range,fmtFull,chips:first>range.start?`<span>data since ${timeLabel(first,range)}</span>`:""};
+    const costWarnings=metric==="cost"?[...new Set(sel.flatMap(a=>datasets.get(`${a}.cost`)?.warnings||[]))]:[];
+    trendView={visible,times:times.filter(t=>t>=first),range,fmtFull,chips:[first>range.start?`<span>data since ${timeLabel(first,range)}</span>`:"",...costWarnings.map(w=>`<span>${esc(w)}</span>`)].join("")};
     const selected=brushParts();
     $("trend-chips").innerHTML=trendView.chips+brushChips(selected);
     const peak=[...stack].filter(([t])=>t>=first).reduce((m,p)=>p[1]>m[1]?p:m,[0,0]);

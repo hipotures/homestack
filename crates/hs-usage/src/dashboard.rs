@@ -645,7 +645,7 @@ fn agent_data(
                 "Pricing unavailable; restart the service to retry the startup catalog".into()
             } else {
                 format!(
-                    "Incomplete estimate; missing prices for {}",
+                    "Incomplete estimate; missing prices for {}. Restart the AI Usage container to download the current LiteLLM pricing catalog",
                     missing.into_iter().collect::<Vec<_>>().join(", ")
                 )
             });
