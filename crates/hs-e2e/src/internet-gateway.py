@@ -151,10 +151,18 @@ async def serve(args):
             await asyncio.sleep(0.5)
             if ssh.returncode is not None:
                 raise RuntimeError("The lab Internet tunnel could not start")
-            descriptor = os.open(state, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(descriptor, "w") as output:
-                json.dump({"pid": os.getpid(), "owner_pid": args.owner_pid, "nat_pid": qemu.pid, "ssh_pid": ssh.pid,
-                           "blocked_host_networks": [str(network) for network in blocked]}, output)
+            # Readers treat the state file's existence as readiness, so it
+            # appears complete: written aside, then linked into place.
+            # The link still refuses an existing state file.
+            pending = directory / "internet.json.tmp"
+            descriptor = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            try:
+                with os.fdopen(descriptor, "w") as output:
+                    json.dump({"pid": os.getpid(), "owner_pid": args.owner_pid, "nat_pid": qemu.pid, "ssh_pid": ssh.pid,
+                               "blocked_host_networks": [str(network) for network in blocked]}, output)
+                os.link(pending, state)
+            finally:
+                pending.unlink(missing_ok=True)
             watchers = [asyncio.create_task(child.wait()) for child in children]
             waiter = asyncio.create_task(stop.wait())
             await asyncio.wait([*watchers, waiter], return_when=asyncio.FIRST_COMPLETED)
