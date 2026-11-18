@@ -60,7 +60,7 @@ The retained ordinary Rust checks protect home/root separation during refresh, r
 
 # E2E and infrastructure safety
 
-Preserve `crates/hs-e2e/`, disposable Proxmox labs, real VM/LXC workflows, controllers, scenarios, fixtures, bootstrap scripts, isolation/cleanup protections, live tools and documentation. Testing cleanup must not modify these components or delete their tests. The owner independently decides E2E evolution. Simulators do not substitute for genuine E2E evidence.
+Preserve `crates/hs-e2e/`, disposable Proxmox labs, real VM/LXC workflows, controllers, scenarios, fixtures, bootstrap scripts, isolation/cleanup protections, live tools and documentation. Testing cleanup must not modify these components or delete their tests. Agents fix defects in E2E code like any other code. Simulators do not substitute for genuine E2E evidence.
 
 Full E2E is separate and explicit, only in an authorized isolated environment. Never connect destructive tests to production or require live E2E for ordinary commits. `scripts/check.sh --live` remains an explicit live-verification entry point and requires the existing isolated-environment credentials and safeguards.
 
