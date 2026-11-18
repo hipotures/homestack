@@ -1,4 +1,4 @@
-/*! The Mechanics 0.1.9 — behaviors (optional companion to the-mechanics.css) — CC0-1.0 — https://github.com/hipotures/the-mechanics */
+/*! The Mechanics 0.1.10 — behaviors (optional companion to the-mechanics.css) — CC0-1.0 — https://github.com/hipotures/the-mechanics */
 /*
   CSS cannot restyle what the browser draws outside the page: the date and
   time popups, Firefox's select list, the title tooltip, confirm(). This

@@ -202,4 +202,4 @@ Several panels side by side: `.tm-panel-grid` (cells share the outer frame, 2px 
   </div>
 </form></dialog>
 ```
-Drawer: `<dialog class="tm-drawer">`. Non-modal side panel: `<aside class="tm-sheet" popover="manual">`. Command palette: `.tm-palette` (see `p1.js`).
+Drawer: `<dialog class="tm-drawer">`. Non-modal side panel: `<div class="tm-sheet" popover="manual" role="dialog" aria-labelledby="…">` (not `<aside>`: it does not allow `role="dialog"`). Command palette: `.tm-palette` (see `p1.js`).

@@ -9,7 +9,7 @@ The Mechanics ships as **plain, compiled CSS** plus an **optional behaviors modu
 **From a release (recommended).** Every release attaches `the-mechanics-css-<tag>.zip`, `the-mechanics-skill-<tag>.zip`, `SHA256SUMS` and `install.sh`. From the consuming project's root:
 
 ```sh
-curl -fsSL https://github.com/hipotures/the-mechanics/releases/latest/download/install.sh | sh -s -- --version v0.1.9 --css public/vendor/the-mechanics
+curl -fsSL https://github.com/hipotures/the-mechanics/releases/latest/download/install.sh | sh -s -- --version v0.1.10 --css public/vendor/the-mechanics
 ```
 
 This puts the files below into `--css` (default `vendor/the-mechanics`) and the agent skill into `.claude/skills/the-mechanics` (`--no-skill` to skip). Commit the vendored files in the consuming project so builds do not depend on GitHub. See `scripts/install.sh --help` for all options.

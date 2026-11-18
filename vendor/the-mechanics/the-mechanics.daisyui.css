@@ -1,4 +1,4 @@
-/*! The Mechanics 0.1.9 — daisyUI 5 bridge — CC0-1.0 — https://github.com/hipotures/the-mechanics */
+/*! The Mechanics 0.1.10 — daisyUI 5 bridge — CC0-1.0 — https://github.com/hipotures/the-mechanics */
 /*
  * The Mechanics → daisyUI 5 bridge (optional).
  *
@@ -53,3 +53,9 @@
 .d-range::-webkit-slider-thumb { border-radius: var(--tm-radius-1); }
 .d-range::-moz-range-thumb { border-radius: var(--tm-radius-1); }
 
+
+/* daisyUI draws inactive tabs at 50% of the text color (~3:1); use the
+   secondary text token so tab labels keep 4.5:1 in all three themes. */
+.d-tab:not(.d-tab-active, [aria-selected="true"], [disabled], .d-tab-disabled, :hover) {
+  color: var(--tm-text-2);
+}
