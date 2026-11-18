@@ -43,7 +43,8 @@ p { margin: 0; }
 
 /* Account panel */
 .aa-account__head { flex-wrap: nowrap; }
-.aa-account__title { overflow-wrap: anywhere; }
+/* Inline flow: the name breaks only between words and "· plan" moves as one unit. */
+.aa-account__title { display: block; overflow-wrap: break-word; }
 .aa-period {
   flex: none;
   font-family: var(--tm-font-mono);
@@ -194,10 +195,8 @@ p { margin: 0; }
 .aa-auth-problem { color: var(--tm-warning); }
 .aa-account.is-inactive .aa-auth-problem { color: var(--tm-text-2); }
 
-.aa-plan { margin-left: 0.28em; font-weight: var(--tm-weight-regular); color: var(--tm-text-2); }
+.aa-plan { margin-left: 0.28em; font-weight: var(--tm-weight-regular); color: var(--tm-text-2); white-space: nowrap; }
 
-/* the title is a flex row with a gap; spacing around "· plan" comes from margins only */
-.aa-account__title { gap: 0; }
 /* Rare action: a quiet icon in the page head, not a primary button. */
 .aa-add > .tm-tip__bubble { left: auto; right: 0; transform: none; translate: none; white-space: nowrap; }
 
