@@ -6,8 +6,6 @@ body { margin: 0; }
 p { margin: 0; }
 
 .aa-main {
-  max-width: 1320px;
-  margin: 0 auto;
   padding: var(--tm-space-6) var(--tm-space-4) var(--tm-space-10);
   display: flex;
   flex-direction: column;

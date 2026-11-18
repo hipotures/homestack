@@ -19,7 +19,7 @@
 <script type="module" src="/assets/the-mechanics/the-mechanics.js?v=__HOMESTACK_USAGE_VERSION__"></script>
 <script type="module" src="/assets/datastar-1.0.4.js?v=__HOMESTACK_USAGE_VERSION__"></script>
 </head><body class="tm-root">
-<main class="aiu-main" data-signals="window.usage.initial()"
+<main class="tm-container aiu-main" data-signals="window.usage.initial()"
  data-init="window.usage.restore(el)"
  data-effect="@get('/api/dashboard/events', {payload:{agent:$agent,host:$host,project:$project,range:$range,epoch:window.usage.select({agent:$agent,host:$host,project:$project,range:$range},$_sync)},openWhenHidden:true,retry:'always',retryMaxCount:1000,retryInterval:3000})">
 <header class="tm-page-head aiu-head">

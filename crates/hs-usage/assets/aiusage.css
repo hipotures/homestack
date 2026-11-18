@@ -41,8 +41,6 @@
 [hidden] { display: none !important; }
 body { overflow-x: hidden; font-variant-numeric: tabular-nums; }
 .aiu-main {
-  max-width: 1440px;
-  margin: 0 auto;
   padding: var(--tm-space-6) var(--tm-space-4) var(--tm-space-12);
   display: grid;
   gap: var(--tm-gap-region);

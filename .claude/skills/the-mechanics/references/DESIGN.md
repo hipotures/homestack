@@ -139,7 +139,7 @@ Why Plex: open license (OFL-1.1), a *soft* monospace with clear `0/O`, `1/l/I` d
 - Media: product 4:3, thumbnail 1:1, hero 16:9.
 
 ### Layout
-Reading width 68ch; content max 1600 px; narrow 1120 px; sidebar 232 px (56 px collapsed); drawer `min(26rem, 100vw)`; dialog `min(30rem, 100vw − 2rem)`. Breakpoints: 640 (stack tables, single-column forms), 900 (sidebar → horizontal strip, layouts stack), 1200, 1440.
+Reading width 68ch; content max 1600 px; narrow 1120 px (see *Content width* below); sidebar 232 px (56 px collapsed); drawer `min(26rem, 100vw)`; dialog `min(30rem, 100vw − 2rem)`. Breakpoints: 640 (stack tables, single-column forms), 900 (sidebar → horizontal strip, layouts stack), 1200, 1440.
 
 ### Motion
 90 / 150 / 240 ms, `cubic-bezier(.2,0,0,1)`. Only color, opacity and small translations animate. `prefers-reduced-motion: reduce` zeroes durations and stops spinners, shimmer and stripes (verified). Theme switching suppresses transitions for one frame (`.tm-theme-switching`) so the change is instant.
@@ -185,6 +185,12 @@ Reading width 68ch; content max 1600 px; narrow 1120 px; sidebar 232 px (56 px c
 - **A filter sits next to what it filters** (section head, list head), never in a distant toolbar.
 - Report state, not invented progress: no progress bars for work that does not report partial progress.
 - **Selection across pages:** the bulk bar counts the whole selection; the header checkbox acts on the visible page; when a full page is selected and more rows match, the bar offers “Select all N matching”; the “Selected only” toggle lists the whole selection (and shows as a removable filter chip). The bar does not repeat what the table already shows, and nothing in it shifts: fixed labels, a two-digit counter width, and the optional “Select all N matching” placed last.
+
+### Content width
+- Page content is capped and **centered**: `.tm-main` keeps the full area (scrolling, background) and grows its side padding so the content is at most `--tm-content-max` (1600 px) wide, centered in the space next to the sidebar. The sidebar stays at the left edge.
+- `.tm-main--narrow` caps at `--tm-content-narrow` (1120 px) for forms, settings and reading pages; `.tm-main--full` removes the cap (only for views that use every column, e.g. wide tables or wall dashboards).
+- Layouts without `.tm-shell` use `.tm-container` (`--narrow`) for the same cap.
+- Never left-align capped content on wide screens: all spare width ends up on one side and pages with different caps look like different systems.
 
 ### Documentation-only state classes
 `.is-hover`, `.is-active`, `.is-focus`, `.is-selected`, `.is-open` mirror interactive states for galleries and visual tests. Applications should rely on real pseudo-classes and ARIA states.
