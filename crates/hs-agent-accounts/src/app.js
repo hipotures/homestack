@@ -539,9 +539,20 @@ $('#theme').onclick = () => {
 theme();
 let hideFree = true;
 try { hideFree = localStorage.getItem('hideFree') !== 'false'; } catch {}
-$('#hide-free').checked = hideFree;
-$('#hide-free').onchange = () => {
-  hideFree = $('#hide-free').checked;
+// Icon toggles show the current state, like the theme button.
+const eye = 'M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8s-2.5 4.5-6.5 4.5S1.5 8 1.5 8zM8 10a2 2 0 1 0 0-4 2 2 0 0 0 0 4z';
+const funnel = 'M1.5 2.5h13l-5 6v5l-3 1.5v-6.5z';
+function showToggle(id, on, icon, onText, offText) {
+  $(`#${id}-icon`).setAttribute('d', on ? `${icon}M2.5 13.5l11-11` : icon);
+  const text = on ? onText : offText;
+  $(`#${id}`).setAttribute('aria-label', text);
+  setText($(`#${id}-tip`), text);
+}
+const showHideFree = () => showToggle('hide-free', hideFree, funnel, 'Free accounts hidden · click to show', 'Free accounts shown · click to hide');
+showHideFree();
+$('#hide-free').onclick = () => {
+  hideFree = !hideFree;
+  showHideFree();
   try { localStorage.setItem('hideFree', hideFree); } catch {}
   refresh().catch(notice);
 };
@@ -568,10 +579,7 @@ function masked(profiles) {
   });
 }
 function showMask() {
-  const text = maskIdentities ? 'Names and emails hidden · click to show' : 'Hide names and emails';
-  $('#mask').setAttribute('aria-pressed', maskIdentities);
-  $('#mask').setAttribute('aria-label', text);
-  setText($('#mask-tip'), text);
+  showToggle('mask', maskIdentities, eye, 'Names and emails hidden · click to show', 'Names and emails shown · click to hide');
 }
 $('#mask').onclick = () => {
   maskIdentities = !maskIdentities;

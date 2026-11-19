@@ -28,8 +28,6 @@ p { margin: 0; }
 .aa-telegram[data-status="pending"] { color: var(--tm-line-disabled); }
 .aa-telegram[data-status="failed"] { color: var(--tm-danger); }
 
-.aa-filter { align-items: center; font-size: var(--tm-text-sm); color: var(--tm-text-2); }
-.aa-filter > input { margin-top: 0; }
 .aa-empty { padding: var(--tm-space-4); color: var(--tm-text-2); border-right: var(--tm-bw-1) solid var(--tm-line-1); border-bottom: var(--tm-bw-1) solid var(--tm-line-1); }
 
 /* Provider identity: the only decorative color on the page (name + usage bars).
@@ -171,7 +169,6 @@ p { margin: 0; }
 }
 .aa-cards > .tm-panel { height: 100%; }
 .aa-section .tm-section-head { margin: 0; }
-.aa-section .tm-section-head > .aa-filter { margin-left: auto; }
 .aa-cards > .tm-panel > .aa-account__foot { border-top-color: var(--tm-line-3); }
 
 /* Problems inline: same size as the text they annotate, no icons. */
@@ -207,6 +204,7 @@ p { margin: 0; }
 .aa-plan { font-weight: var(--tm-weight-regular); color: var(--tm-text-2); white-space: nowrap; }
 
 /* Rare action: a quiet icon in the page head, not a primary button. */
+.aa-hidefree > .tm-tip__bubble,
 .aa-mask > .tm-tip__bubble { left: auto; right: 0; transform: none; translate: none; white-space: nowrap; }
 .aa-add > .tm-tip__bubble { left: auto; right: 0; transform: none; translate: none; white-space: nowrap; }
 
