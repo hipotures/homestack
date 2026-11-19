@@ -216,6 +216,7 @@ async function details(profile) {
   content.append(facts);
   if (profile.snapshot?.reset_credits) content.append(node('p', `Available earned resets: ${profile.snapshot.reset_credits.availableCount ?? 'Unknown'}`));
   const history = await api(`/profiles/${profile.id}/history`);
+  if (maskIdentities) for (const snapshot of history) if (snapshot.account.email) snapshot.account.email = maskEmail(snapshot.account.email);
   content.append(node('h3', 'Recent successful checks', 'aa-h3'));
   if (!history.length) content.append(node('p', 'No successful measurements yet.', 'tm-meta'));
   const recent = history.slice(0, 20);
@@ -260,7 +261,7 @@ function accountLine(profile, email) {
   return line;
 }
 async function refresh() {
-  const all = await api('/profiles');
+  const all = maskIdentities ? masked(await api('/profiles')) : await api('/profiles');
   const profiles = hideFree ? all.filter(p => p.account?.plan?.toLowerCase() !== 'free') : all;
   $('#profiles').replaceChildren();
   if (!all.length) $('#profiles').append(node('p', 'No profiles yet. Add an account to begin.', 'aa-empty'));
@@ -366,7 +367,8 @@ async function refresh() {
     }));
     foot.append(actions); card.append(foot); $('#profiles').append(card);
   }
-  profileGrid.apply();
+  // Both sections share one column count, set by the accounts: 2 to 4.
+  document.querySelector('.aa-main').style.setProperty('--aa-cols', Math.min(4, Math.max(2, profiles.length)));
   const runtimes = await api('/runtimes');
   syncIssueToasts(all, runtimes);
   $('#runtimes').replaceChildren();
@@ -406,28 +408,8 @@ async function refresh() {
     }
     body.append(actions); row.append(head, body); $('#runtimes').append(row);
   }
-  runtimeGrid.apply();
   setText($('#versions'), [appVersion, ...runtimes.map(r => `${runtimeName(r.provider)} ${r.version}`)].join(' · '));
 }
-/** Panel grids never leave an empty cell: balance the columns, stretch the last panel over a remaining gap (after balanceGrid in The Mechanics playground). */
-function balanceGrid(grid, minPx) {
-  const apply = () => {
-    const width = grid.clientWidth;
-    if (!width) return;
-    const items = [...grid.children].filter(el => !el.hidden);
-    items.forEach(el => el.style.removeProperty('grid-column'));
-    if (!items.length) return;
-    const cols = Math.min(Math.max(1, Math.floor(width / minPx)), items.length);
-    const rows = Math.ceil(items.length / cols), balanced = Math.ceil(items.length / rows);
-    grid.style.gridTemplateColumns = `repeat(${balanced}, minmax(0, 1fr))`;
-    const gap = rows * balanced - items.length;
-    if (gap > 0) items.at(-1).style.gridColumn = `span ${gap + 1}`;
-  };
-  new ResizeObserver(apply).observe(grid);
-  return { apply };
-}
-// Separate panels: a short last row is just canvas, no stretching needed.
-const profileGrid = { apply() {} }, runtimeGrid = { apply() {} };
 const runtimeName = provider => ({ codex: 'Codex CLI', claude: 'Claude Code' })[provider] || provider;
 const appVersion = document.querySelector('#versions').textContent;
 function compareVersions(a, b) {
@@ -563,6 +545,45 @@ $('#hide-free').onchange = () => {
   try { localStorage.setItem('hideFree', hideFree); } catch {}
   refresh().catch(notice);
 };
+// Masked identities for screenshots: names become account_one, account_two…,
+// emails user_one@example.com…; numbering follows the profile order.
+let maskIdentities = false;
+try { maskIdentities = localStorage.getItem('maskIdentities') === 'true'; } catch {}
+const numberWords = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
+const numberWord = index => numberWords[index] ?? String(index + 1);
+const maskedEmails = new Map();
+function maskEmail(email) {
+  if (!maskedEmails.has(email)) maskedEmails.set(email, `user_${numberWord(maskedEmails.size)}@example.com`);
+  return maskedEmails.get(email);
+}
+function masked(profiles) {
+  return profiles.map((p, index) => {
+    const email = p.account?.email, snapshotEmail = p.snapshot?.account?.email;
+    return {
+      ...p,
+      display_name: p.display_name.includes('@') ? maskEmail(p.display_name) : `account_${numberWord(index)}`,
+      account: p.account && { ...p.account, email: email && maskEmail(email) },
+      snapshot: p.snapshot && { ...p.snapshot, account: { ...p.snapshot.account, email: snapshotEmail && maskEmail(snapshotEmail) } },
+    };
+  });
+}
+function showMask() {
+  const text = maskIdentities ? 'Names and emails hidden · click to show' : 'Hide names and emails';
+  $('#mask').setAttribute('aria-pressed', maskIdentities);
+  $('#mask').setAttribute('aria-label', text);
+  setText($('#mask-tip'), text);
+}
+$('#mask').onclick = () => {
+  maskIdentities = !maskIdentities;
+  try { localStorage.setItem('maskIdentities', maskIdentities); } catch {}
+  showMask();
+  // Problem toasts carry account names: rebuild them in the new form.
+  for (const el of issueToasts.values()) el.remove();
+  issueToasts.clear();
+  $('#details').close();
+  refresh().catch(notice);
+};
+showMask();
 const pageVersion = document.querySelector('meta[name="agent-accounts-version"]').content;
 let providersLoaded = false, disconnected = false, polling = false, pollTimer = null, retryDelay = 2000;
 const telegramLabels = {

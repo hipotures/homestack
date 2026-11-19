@@ -6,6 +6,11 @@ body { margin: 0; }
 p { margin: 0; }
 
 .aa-main {
+  /* Column count (2-4) comes from the number of account cards; the page is
+     exactly that many cards wide and centered. */
+  --aa-cols: 4;
+  --aa-card: 23rem;
+  --_max: min(var(--tm-content-max), calc(var(--aa-cols) * var(--aa-card) + (var(--aa-cols) - 1) * var(--tm-gap-region) + 2 * var(--tm-space-4)));
   padding: var(--tm-space-6) var(--tm-space-4) var(--tm-space-10);
   display: flex;
   flex-direction: column;
@@ -160,7 +165,7 @@ p { margin: 0; }
 .aa-section { display: grid; gap: var(--tm-space-2); }
 .aa-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(max(min(100%, 22rem), calc((100% - (var(--aa-cols) - 1) * var(--tm-gap-region)) / var(--aa-cols))), 1fr));
   gap: var(--tm-gap-region);
   align-items: start;
 }
@@ -202,6 +207,7 @@ p { margin: 0; }
 .aa-plan { font-weight: var(--tm-weight-regular); color: var(--tm-text-2); white-space: nowrap; }
 
 /* Rare action: a quiet icon in the page head, not a primary button. */
+.aa-mask > .tm-tip__bubble { left: auto; right: 0; transform: none; translate: none; white-space: nowrap; }
 .aa-add > .tm-tip__bubble { left: auto; right: 0; transform: none; translate: none; white-space: nowrap; }
 
 .aa-theme > .tm-tip__bubble { left: auto; right: 0; transform: none; translate: none; white-space: nowrap; }
